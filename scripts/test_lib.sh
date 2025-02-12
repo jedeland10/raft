@@ -3,7 +3,8 @@
 ROOT_MODULE="go.etcd.io/raft"
 
 function set_root_dir {
-  RAFT_ROOT_DIR=$(go list -f '{{.Dir}}' "${ROOT_MODULE}/v3")
+#  RAFT_ROOT_DIR=$(go list -f '{{.Dir}}' "${ROOT_MODULE}/v3")
+  RAFT_ROOT_DIR=$(go list -f '{{.Dir}}')
 }
 
 set_root_dir
@@ -62,6 +63,7 @@ function log_info {
 #   cmd         - cmd to be executed - that takes package as last argument
 function run_for_module {
   local module=${1:-"."}
+  >&2 echo "${RAFT_ROOT_DIR}/${module}"
   shift 1
   (
     cd "${RAFT_ROOT_DIR}/${module}" && "$@"

@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jedeland10/raft/unicache"
 	"go.etcd.io/raft/v3/confchange"
 	"go.etcd.io/raft/v3/quorum"
 	pb "go.etcd.io/raft/v3/raftpb"
@@ -587,6 +588,7 @@ func (r *raft) send(m pb.Message) {
 		// because the safety of such behavior has not been formally verified,
 		// we err on the side of safety and omit a `&& !m.Reject` condition
 		// above.
+
 		r.msgsAfterAppend = append(r.msgsAfterAppend, m)
 		traceSendMessage(r, &m)
 	} else {
@@ -645,6 +647,19 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		return r.maybeSendSnapshot(to, pr)
 	}
 
+	for _, ent := range ents {
+		field1, err := unicache.GetProtoField(ent.Data, 1)
+		if err != nil {
+			r.logger.Error("could not extract field 1", err)
+			continue
+		}
+		// Process field1 as needed.
+		r.logger.Info("field 1 value:", string(field1))
+	}
+
+	r.logger.Info(r.id, " sending entries to append: ", ents, " to ", to)
+
+	// TODO: UniCache: Encode entries before send?
 	// Send the actual MsgApp otherwise, and update the progress accordingly.
 	r.send(pb.Message{
 		To:      to,
@@ -812,6 +827,7 @@ func (r *raft) reset(term uint64) {
 	r.readOnly = newReadOnly(r.readOnly.option)
 }
 
+// TODO: UniCache, leader code: append to cache as well
 func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	li := r.raftLog.lastIndex()
 	for i := range es {
@@ -1087,6 +1103,11 @@ func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int, rejected 
 
 func (r *raft) Step(m pb.Message) error {
 	traceReceiveMessage(r, &m)
+	if m.Type == pb.MsgApp {
+		for _, entry := range m.Entries {
+			r.logger.Info("entry: ", entry)
+		}
+	}
 
 	// Handle the message term, which may result in our stepping down to a follower.
 	switch {
@@ -1303,6 +1324,10 @@ func stepLeader(r *raft, m pb.Message) error {
 
 		for i := range m.Entries {
 			e := &m.Entries[i]
+
+			fmt.Println("entry data:", e.Data)
+			fmt.Println("entry EncodableFields:", e.EncodableFields)
+
 			var cc pb.ConfChangeI
 			if e.Type == pb.EntryConfChange {
 				var ccc pb.ConfChange
@@ -1713,6 +1738,9 @@ func stepCandidate(r *raft, m pb.Message) error {
 	return nil
 }
 
+// TODO: UniCache: When dropping leader, implement rollback logic
+// for appended entries that were never committed, in handleAppend?
+// Could we handle when we forget leader?
 func stepFollower(r *raft, m pb.Message) error {
 	switch m.Type {
 	case pb.MsgProp:
@@ -1786,6 +1814,9 @@ func logSliceFromMsgApp(m *pb.Message) logSlice {
 	}
 }
 
+// TODO: UniCache: decode encoded messages before appending
+// Also, if log is not matching leaders, check if we have
+// appended entries that were never committed(?)
 func (r *raft) handleAppendEntries(m pb.Message) {
 	// TODO(pav-kv): construct logSlice up the stack next to receiving the
 	// message, and validate it before taking any action (e.g. bumping term).
@@ -1796,6 +1827,7 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 	if mlastIndex, ok := r.raftLog.maybeAppend(a, m.Commit); ok {
+		//r.logger.Info(r.id, " appended ", m.Entries)
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: mlastIndex})
 		return
 	}
@@ -1983,6 +2015,7 @@ func (r *raft) switchToConfig(cfg tracker.Config, trk tracker.ProgressMap) pb.Co
 
 	r.logger.Infof("%x switched to configuration %s", r.id, r.trk.Config)
 	cs := r.trk.ConfState()
+	// TODO: Debug pr, ok ??
 	pr, ok := r.trk.Progress[r.id]
 
 	// Update whether the node itself is a learner, resetting to false when the
