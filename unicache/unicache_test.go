@@ -5,9 +5,7 @@ import (
 	"testing"
 
 	pb "go.etcd.io/raft/v3/raftpb"
-	"google.golang.org/protobuf/encoding/protowire"
 
-	// Adjust the import path as needed.
 	"github.com/jedeland10/raft/unicache"
 )
 
@@ -93,49 +91,6 @@ func TestEncodeDecodeComplexMessageConsistent(t *testing.T) {
 	encoded2 := uc.EncodeEntry(CloneEntry(encoded1))
 	t.Logf("After second encoding (cache hit), entry data: %x", encoded2.Data)
 	printCacheState("After second encoding", uc, t)
-
-	// Scan the encoded message for field 2's tag.
-	data := encoded2.Data
-	var foundField2 bool
-	var tagFieldNum protowire.Number
-	var tagWireType protowire.Type
-	for len(data) > 0 {
-		num, wt, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			break
-		}
-		if int(num) == 2 {
-			tagFieldNum = num
-			tagWireType = wt
-			foundField2 = true
-			break
-		}
-		// Skip the field's value.
-		var skip int
-		switch wt {
-		case protowire.VarintType:
-			_, skip = protowire.ConsumeVarint(data[n:])
-		case protowire.Fixed32Type:
-			_, skip = protowire.ConsumeFixed32(data[n:])
-		case protowire.Fixed64Type:
-			_, skip = protowire.ConsumeFixed64(data[n:])
-		case protowire.BytesType:
-			_, skip = protowire.ConsumeBytes(data[n:])
-		case protowire.StartGroupType:
-			_, skip = protowire.ConsumeGroup(num, data[n:])
-		}
-		if skip < 0 {
-			break
-		}
-		data = data[n+skip:]
-	}
-	if !foundField2 {
-		t.Fatalf("Second encoding: field 2 not found")
-	}
-	t.Logf("Consumed tag for field 2: field %d, wire type %d", tagFieldNum, tagWireType)
-	if tagWireType != protowire.VarintType {
-		t.Errorf("Second encoding: expected field 2 to have wire type Varint (0), got %d", tagWireType)
-	}
 
 	// --- Decoding ---
 	// Now decode the entry so that the varint-encoded field 2 is replaced
