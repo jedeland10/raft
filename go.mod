@@ -1,3 +1,5 @@
+module github.com/jedeland10/raft
+
 go 1.23
 
 toolchain go1.23.5
@@ -11,7 +13,7 @@ require (
 	google.golang.org/protobuf v1.36.3
 )
 
-replace go.etcd.io/raft/v3 v3.6.0-beta.0 => github.com/jedeland10/raft
+replace go.etcd.io/raft/v3 v3.6.0-beta.0 => /Users/johanedeland/Documents/plugg/thesis/raft
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
