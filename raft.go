@@ -657,7 +657,8 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		entriesForFollower = append(entriesForFollower, encodedEntry)
 	}
 
-	r.logger.Info(r.id, " sending entries to append: ", entriesForFollower, " to ", to)
+	r.logger.Info(r.id, " entries: ", ents)
+	r.logger.Info(r.id, " encoded entries: ", entriesForFollower)
 
 	// TODO: UniCache: Encode entries before send?
 	// Send the actual MsgApp otherwise, and update the progress accordingly.
@@ -1114,11 +1115,6 @@ func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int, rejected 
 
 func (r *raft) Step(m pb.Message) error {
 	traceReceiveMessage(r, &m)
-	if m.Type == pb.MsgApp {
-		for _, entry := range m.Entries {
-			r.logger.Info("entry: ", entry)
-		}
-	}
 
 	// Handle the message term, which may result in our stepping down to a follower.
 	switch {
@@ -1335,9 +1331,6 @@ func stepLeader(r *raft, m pb.Message) error {
 
 		for i := range m.Entries {
 			e := &m.Entries[i]
-
-			fmt.Println("entry data:", e.Data)
-			fmt.Println("entry EncodableFields:", e.EncodableFields)
 
 			var cc pb.ConfChangeI
 			if e.Type == pb.EntryConfChange {
@@ -1836,8 +1829,6 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 	// Decode each entry so that if the leader sent an integer reference,
 	// we restore the original key bytes.
 	for i, ent := range m.Entries {
-		fmt.Println("unicache state: ", r.uniCache)
-		fmt.Println("recieved: ", ent)
 		m.Entries[i] = r.uniCache.DecodeEntry(ent)
 	}
 

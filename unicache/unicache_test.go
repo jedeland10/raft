@@ -6,7 +6,7 @@ import (
 
 	pb "go.etcd.io/raft/v3/raftpb"
 
-	"github.com/jedeland10/raft/unicache"
+	"go.etcd.io/raft/v3/unicache"
 )
 
 // CloneEntry makes a deep copy of a pb.Entry.

@@ -10,7 +10,7 @@ import (
 
 // cachedFieldNumber is the protobuf field number that we want to cache.
 // (Change this if your application uses a different field number.)
-const cachedFieldNumber = 2
+const cachedFieldNumber = 1
 
 // UniCache is the interface that every Raft instance will implement.
 type UniCache interface {
@@ -107,7 +107,6 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 	var found bool
 	for len(data) > 0 {
 		fieldNum, wireType, n := protowire.ConsumeTag(data)
-		fmt.Println("consumed tag: ", fieldNum, wireType)
 		if n < 0 {
 			break
 		}

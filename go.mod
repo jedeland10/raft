@@ -1,4 +1,4 @@
-module github.com/jedeland10/raft
+module go.etcd.io/raft/v3
 
 go 1.23
 
@@ -9,7 +9,6 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.4
 	github.com/stretchr/testify v1.10.0
-	go.etcd.io/raft/v3 v3.6.0-beta.0
 	google.golang.org/protobuf v1.36.3
 )
 
