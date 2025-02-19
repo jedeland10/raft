@@ -69,7 +69,7 @@ func TestEncodeDecodeComplexMessageConsistent(t *testing.T) {
 	printCacheState("After first encoding", uc, t)
 
 	// Verify that field 2 still contains the full value.
-	cacheField1, err := unicache.GetProtoField(encoded1.Data, 2)
+	cacheField1, _, err := unicache.GetProtoFieldAndWireType(encoded1.Data, 2)
 	if err != nil {
 		t.Fatalf("First encoding: failed to extract field 2: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestEncodeDecodeComplexMessageConsistent(t *testing.T) {
 		t.Errorf("First encoding: expected field 2 %q, got %q", expectedCacheValue, cacheField1)
 	}
 	// Field 1 should remain unchanged.
-	nonCacheField1, err := unicache.GetProtoField(encoded1.Data, 1)
+	nonCacheField1, _, err := unicache.GetProtoFieldAndWireType(encoded1.Data, 1)
 	if err != nil {
 		t.Fatalf("First encoding: failed to extract field 1: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestEncodeDecodeComplexMessageConsistent(t *testing.T) {
 	printCacheState("After decoding", uc, t)
 
 	// Verify that field 2 is restored.
-	decodedCacheField, err := unicache.GetProtoField(decoded.Data, 2)
+	decodedCacheField, _, err := unicache.GetProtoFieldAndWireType(decoded.Data, 2)
 	if err != nil {
 		t.Fatalf("Decoding: failed to extract field 2: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestEncodeDecodeComplexMessageConsistent(t *testing.T) {
 		t.Errorf("Decoding: expected field 2 %q, got %q", expectedCacheValue, decodedCacheField)
 	}
 	// Field 1 should remain unchanged.
-	decodedNonCacheField, err := unicache.GetProtoField(decoded.Data, 1)
+	decodedNonCacheField, _, err := unicache.GetProtoFieldAndWireType(decoded.Data, 1)
 	if err != nil {
 		t.Fatalf("Decoding: failed to extract field 1: %v", err)
 	}

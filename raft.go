@@ -657,9 +657,6 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		entriesForFollower = append(entriesForFollower, encodedEntry)
 	}
 
-	r.logger.Info(r.id, " entries: ", ents)
-	r.logger.Info(r.id, " encoded entries: ", entriesForFollower)
-
 	// TODO: UniCache: Encode entries before send?
 	// Send the actual MsgApp otherwise, and update the progress accordingly.
 	r.send(pb.Message{
@@ -1822,15 +1819,20 @@ func logSliceFromMsgApp(m *pb.Message) logSlice {
 // Also, if log is not matching leaders, check if we have
 // appended entries that were never committed(?)
 func (r *raft) handleAppendEntries(m pb.Message) {
+	// Decode each entry so that if the leader sent an integer reference,
+	// we restore the original key bytes.
+
+	var entriesHandling []pb.Entry
+	for _, ent := range m.Entries {
+		entryCopy := unicache.CloneEntry(ent)
+		decodedEntry := r.uniCache.DecodeEntry(entryCopy)
+		entriesHandling = append(entriesHandling, decodedEntry)
+	}
+	m.Entries = entriesHandling
+
 	// TODO(pav-kv): construct logSlice up the stack next to receiving the
 	// message, and validate it before taking any action (e.g. bumping term).
 	a := logSliceFromMsgApp(&m)
-
-	// Decode each entry so that if the leader sent an integer reference,
-	// we restore the original key bytes.
-	for i, ent := range m.Entries {
-		m.Entries[i] = r.uniCache.DecodeEntry(ent)
-	}
 
 	if a.prev.index < r.raftLog.committed {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
