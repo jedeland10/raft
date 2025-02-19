@@ -10,7 +10,7 @@ import (
 
 // cachedFieldNumber is the protobuf field number that we want to cache.
 // (Change this if your application uses a different field number.)
-const cachedFieldNumber = 2
+const cachedFieldNumber = 1
 
 // UniCache is the interface that every Raft instance will implement.
 type UniCache interface {
