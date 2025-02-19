@@ -29,7 +29,6 @@ import (
 	"go.etcd.io/raft/v3/quorum"
 	pb "go.etcd.io/raft/v3/raftpb"
 	"go.etcd.io/raft/v3/tracker"
-	"go.etcd.io/raft/v3/unicache"
 )
 
 const (
@@ -432,9 +431,7 @@ type raft struct {
 	// current term.
 	pendingReadIndexMessages []pb.Message
 
-	traceLogger   TraceLogger
-	uniCache      unicache.UniCache
-	followerCache map[uint64]unicache.UniCache
+	traceLogger TraceLogger
 }
 
 func newRaft(c *Config) *raft {
@@ -465,7 +462,6 @@ func newRaft(c *Config) *raft {
 		disableConfChangeValidation: c.DisableConfChangeValidation,
 		stepDownOnRemoval:           c.StepDownOnRemoval,
 		traceLogger:                 c.TraceLogger,
-		uniCache:                    unicache.NewUniCache(),
 	}
 
 	traceInitState(r)
@@ -650,16 +646,6 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		return r.maybeSendSnapshot(to, pr)
 	}
 
-	var entriesForFollower []pb.Entry
-	for _, ent := range ents {
-		entryCopy := unicache.CloneEntry(ent)
-		encodedEntry := r.followerCache[to].EncodeEntry(entryCopy)
-		entriesForFollower = append(entriesForFollower, encodedEntry)
-	}
-
-	r.logger.Info(r.id, " entries: ", ents)
-	r.logger.Info(r.id, " encoded entries: ", entriesForFollower)
-
 	// TODO: UniCache: Encode entries before send?
 	// Send the actual MsgApp otherwise, and update the progress accordingly.
 	r.send(pb.Message{
@@ -667,7 +653,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		Type:    pb.MsgApp,
 		Index:   prevIndex,
 		LogTerm: prevTerm,
-		Entries: entriesForFollower,
+		Entries: ents,
 		Commit:  r.raftLog.committed,
 	})
 	pr.SentEntries(len(ents), uint64(payloadsSize(ents)))
@@ -957,16 +943,6 @@ func (r *raft) becomeLeader() {
 	r.tick = r.tickHeartbeat
 	r.lead = r.id
 	r.state = StateLeader
-
-	// Initialize follower caches for per-follower encoding state.
-	// This map is keyed by follower ID. We assume that r.trk.Progress holds all
-	// nodes in the configuration (including the leader). We only need caches for followers.
-	r.followerCache = make(map[uint64]unicache.UniCache)
-	for id := range r.trk.Progress {
-		if id != r.id {
-			r.followerCache[id] = unicache.NewUniCache()
-		}
-	}
 
 	// Followers enter replicate mode when they've been successfully probed
 	// (perhaps after having received a snapshot as a result). The leader is
@@ -1825,12 +1801,6 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 	// TODO(pav-kv): construct logSlice up the stack next to receiving the
 	// message, and validate it before taking any action (e.g. bumping term).
 	a := logSliceFromMsgApp(&m)
-
-	// Decode each entry so that if the leader sent an integer reference,
-	// we restore the original key bytes.
-	for i, ent := range m.Entries {
-		m.Entries[i] = r.uniCache.DecodeEntry(ent)
-	}
 
 	if a.prev.index < r.raftLog.committed {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
