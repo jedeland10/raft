@@ -132,7 +132,7 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 			uc.nextID++
 			uc.cache[newID] = keyField
 			uc.reverseCache[string(keyField)] = newID
-			fmt.Println("DecodeEntry - cache miss; adding key:", keyField)
+			//			fmt.Println("DecodeEntry - cache miss; adding key:", keyField)
 		}
 		return entry
 	} else if wireType == protowire.VarintType {
