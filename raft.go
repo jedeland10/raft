@@ -653,8 +653,8 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	var entriesForFollower []pb.Entry
 	for _, ent := range ents {
 		entryCopy := unicache.CloneEntry(ent)
-		encodedEntry := r.followerCache[to].EncodeEntry(entryCopy)
-		entriesForFollower = append(entriesForFollower, encodedEntry)
+		entryCopy = r.followerCache[to].EncodeEntry(entryCopy)
+		entriesForFollower = append(entriesForFollower, entryCopy)
 	}
 
 	// TODO: UniCache: Encode entries before send?
