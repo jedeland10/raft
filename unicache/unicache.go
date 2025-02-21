@@ -87,12 +87,12 @@ func (uc *uniCache) EncodeEntry(entry pb.Entry) pb.Entry {
 		// Already cached: create a varint encoding of the id.
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		// Replace the key field (field 1) in the nested PutRequest with the encoded id.
-		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
+		newRawPutBytes, err := ReplaceProtoFieldInPlaceCompress(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err != nil {
 			return entry
 		}
 		// Replace the PutRequest field (field 4) in the overall entry with the updated nested bytes.
-		newData, err := ReplaceProtoField(entry.Data, 4, newRawPutBytes, protowire.BytesType)
+		newData, err := ReplaceProtoFieldInPlaceCompress(entry.Data, 4, newRawPutBytes, protowire.BytesType)
 		if err != nil {
 			return entry
 		}
@@ -242,6 +242,119 @@ func ReplaceProtoField(data []byte, targetField int, newValue []byte, newWireTyp
 		data = data[skip:]
 	}
 	return out, nil
+}
+
+// ReplaceProtoFieldInPlaceCompress replaces occurrences of the target field in the
+// protobuf message contained in data, handling only the compressing case (new encoding is shorter).
+// For BytesType fields, it correctly inserts the length prefix.
+func ReplaceProtoFieldInPlaceCompress(data []byte, targetField int, newValue []byte, newWireType protowire.Type) ([]byte, error) {
+	type fieldInfo struct {
+		start    int  // start index of the field in the original slice
+		end      int  // end index (exclusive)
+		isTarget bool // whether this field is the one to replace
+		newLen   int  // the length of the field after replacement
+	}
+	var fields []fieldInfo
+	i := 0
+	// First pass: record each field's boundaries and compute new lengths.
+	for i < len(data) {
+		start := i
+		// Consume the tag.
+		fieldNum, wireType, n := protowire.ConsumeTag(data[i:])
+		if n < 0 {
+			return nil, errors.New("failed to consume tag")
+		}
+		i += n
+
+		var skip int
+		switch wireType {
+		case protowire.VarintType:
+			_, m := protowire.ConsumeVarint(data[i:])
+			if m < 0 {
+				return nil, errors.New("failed to consume varint")
+			}
+			skip = m
+		case protowire.Fixed32Type:
+			_, m := protowire.ConsumeFixed32(data[i:])
+			if m < 0 {
+				return nil, errors.New("failed to consume fixed32")
+			}
+			skip = m
+		case protowire.Fixed64Type:
+			_, m := protowire.ConsumeFixed64(data[i:])
+			if m < 0 {
+				return nil, errors.New("failed to consume fixed64")
+			}
+			skip = m
+		case protowire.BytesType:
+			_, m := protowire.ConsumeBytes(data[i:])
+			if m < 0 {
+				return nil, errors.New("failed to consume bytes")
+			}
+			skip = m
+		case protowire.StartGroupType:
+			_, m := protowire.ConsumeGroup(fieldNum, data[i:])
+			if m < 0 {
+				return nil, errors.New("failed to consume group")
+			}
+			skip = m
+		default:
+			return nil, fmt.Errorf("unknown wire type: %v", wireType)
+		}
+		i += skip
+
+		origFieldLen := i - start
+		isTarget := int(fieldNum) == targetField
+		newFieldLen := origFieldLen
+		if isTarget {
+			// Build the new tag.
+			newTag := protowire.AppendTag(nil, protowire.Number(targetField), newWireType)
+			// For BytesType fields, the proper encoding uses protowire.AppendBytes,
+			// which adds a length prefix. For other types, we use newValue directly.
+			var newFieldBytes []byte
+			if newWireType == protowire.BytesType {
+				newFieldBytes = protowire.AppendBytes(nil, newValue)
+			} else {
+				newFieldBytes = newValue
+			}
+			newFieldLen = len(newTag) + len(newFieldBytes)
+			// We expect newFieldLen to be <= origFieldLen.
+			if newFieldLen > origFieldLen {
+				return nil, fmt.Errorf("new field encoding is larger than original; expected compressing")
+			}
+		}
+		fields = append(fields, fieldInfo{start: start, end: i, isTarget: isTarget, newLen: newFieldLen})
+	}
+
+	// Calculate the total new length.
+	newTotalLen := 0
+	for _, f := range fields {
+		newTotalLen += f.newLen
+	}
+	// In a compressing scenario, newTotalLen is guaranteed to be <= len(data).
+
+	// Second pass: Copy fields backwards to avoid overwriting data that hasn't been moved.
+	writePos := newTotalLen
+	for j := len(fields) - 1; j >= 0; j-- {
+		f := fields[j]
+		writePos -= f.newLen
+		if f.isTarget {
+			newTag := protowire.AppendTag(nil, protowire.Number(targetField), newWireType)
+			var newFieldBytes []byte
+			if newWireType == protowire.BytesType {
+				newFieldBytes = protowire.AppendBytes(nil, newValue)
+			} else {
+				newFieldBytes = newValue
+			}
+			copy(data[writePos:], newTag)
+			copy(data[writePos+len(newTag):], newFieldBytes)
+		} else {
+			copy(data[writePos:], data[f.start:f.end])
+		}
+	}
+
+	// Return the slice re-sliced to the new length.
+	return data[:newTotalLen], nil
 }
 
 // GetProtoFieldAndWireType scans the provided protobuf-encoded data looking for the first
