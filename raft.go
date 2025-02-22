@@ -650,7 +650,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		return r.maybeSendSnapshot(to, pr)
 	}
 
-	var entriesForFollower []pb.Entry
+	entriesForFollower := make([]pb.Entry, 0, len(ents))
 	for _, ent := range ents {
 		entryCopy := unicache.CloneEntry(ent)
 		entryCopy = r.followerCache[to].EncodeEntry(entryCopy)
@@ -1822,11 +1822,10 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 	// Decode each entry so that if the leader sent an integer reference,
 	// we restore the original key bytes.
 
-	var entriesHandling []pb.Entry
-	for _, ent := range m.Entries {
+	entriesHandling := make([]pb.Entry, len(m.Entries))
+	for i, ent := range m.Entries {
 		entryCopy := unicache.CloneEntry(ent)
-		decodedEntry := r.uniCache.DecodeEntry(entryCopy)
-		entriesHandling = append(entriesHandling, decodedEntry)
+		entriesHandling[i] = r.uniCache.DecodeEntry(entryCopy)
 	}
 	m.Entries = entriesHandling
 
