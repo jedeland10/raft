@@ -17,6 +17,8 @@ type UniCache interface {
 	// NewUniCache creates a new cache instance.
 	NewUniCache() UniCache
 
+	EncodeData(data []byte) []byte
+
 	// EncodeEntry processes a Raft log entry: it looks for the cached field in the
 	// entry’s Data and, if the field has been seen before, replaces its full value
 	// with a small integer reference.
@@ -59,6 +61,45 @@ func NewUniCache() UniCache {
 // NewUniCache implements the UniCache interface.
 func (uc *uniCache) NewUniCache() UniCache {
 	return NewUniCache()
+}
+
+func (uc *uniCache) EncodeData(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	// 1) Extract rawPutBytes
+	rawPutBytes, _, err := GetProtoFieldAndWireType(data, 4)
+	if err != nil {
+		return data
+	}
+
+	// 2) Extract the keyBytes
+	keyBytes, _, err := GetProtoFieldAndWireType(rawPutBytes, cachedFieldNumber)
+	if err != nil {
+		return data
+	}
+
+	// 3) Check if key is cached
+	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
+		// Already cached -> replace with varint
+		encodedID := protowire.AppendVarint(nil, uint64(id))
+		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
+		if err != nil {
+			return data
+		}
+		newData, err := ReplaceProtoField(data, 4, newRawPutBytes, protowire.BytesType)
+		if err != nil {
+			return data
+		}
+		data = newData
+	} else {
+		// Cache miss -> store key
+		newID := uc.nextID
+		uc.nextID++
+		uc.cache[newID] = keyBytes
+		uc.reverseCache[string(keyBytes)] = newID
+	}
+	return data
 }
 
 // EncodeEntry looks into the PutRequest (field 4) of entry.Data,

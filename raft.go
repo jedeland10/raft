@@ -652,12 +652,23 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 	entriesForFollower := make([]pb.Entry, 0, len(ents))
 	for _, ent := range ents {
-		entryCopy := unicache.CloneEntry(ent)
-		entryCopy = r.followerCache[to].EncodeEntry(entryCopy)
+		// Shallow-copy the struct fields, reusing the original ones.
+		// No separate allocation for Data yet.
+		entryCopy := pb.Entry{
+			Term:  ent.Term,
+			Index: ent.Index,
+			Type:  ent.Type,
+		}
+
+		// Encode (and potentially allocate new) data.
+		// If EncodeData always returns a new slice when changes are needed,
+		// we’re guaranteed not to mutate the storage-backed ent.Data.
+		entryCopy.Data = r.followerCache[to].EncodeData(ent.Data)
+
+		// Now append the newly formed pb.Entry to our outbound slice.
 		entriesForFollower = append(entriesForFollower, entryCopy)
 	}
 
-	// TODO: UniCache: Encode entries before send?
 	// Send the actual MsgApp otherwise, and update the progress accordingly.
 	r.send(pb.Message{
 		To:      to,
@@ -667,7 +678,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		Entries: entriesForFollower,
 		Commit:  r.raftLog.committed,
 	})
-	pr.SentEntries(len(ents), uint64(payloadsSize(ents)))
+	pr.SentEntries(len(ents), uint64(payloadsSize(entriesForFollower)))
 	pr.SentCommit(r.raftLog.committed)
 	return true
 }
