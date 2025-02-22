@@ -1,6 +1,7 @@
 package unicache
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 
@@ -88,7 +89,7 @@ func (uc *uniCache) lookupID(key []byte) (int, bool) {
 	h := uc.hashKey(key)
 	bucket := uc.store[h]
 	for _, pair := range bucket {
-		if len(pair.key) == len(key) && string(pair.key) == string(key) {
+		if len(pair.key) == len(key) && bytes.Equal(pair.key, key) {
 			return pair.id, true
 		}
 	}
