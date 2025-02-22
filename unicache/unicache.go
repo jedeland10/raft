@@ -6,6 +6,8 @@ import (
 
 	pb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/encoding/protowire"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 // cachedFieldNumber is the protobuf field number that we want to cache.
@@ -17,6 +19,8 @@ type UniCache interface {
 	// NewUniCache creates a new cache instance.
 	NewUniCache() UniCache
 
+	// EncodeData compresses the key in the raw bytes if it has been seen before,
+	// replacing it with a varint ID.
 	EncodeData(data []byte) []byte
 
 	// EncodeEntry processes a Raft log entry: it looks for the cached field in the
@@ -29,15 +33,25 @@ type UniCache interface {
 	DecodeEntry(entry pb.Entry) pb.Entry
 }
 
-// uniCache is a concrete implementation of the UniCache interface.
-// It maintains two maps: one from int -> []byte and a reverse map from key (as string) -> int.
-type uniCache struct {
-	cache        map[int][]byte // id -> key bytes
-	reverseCache map[string]int // key string -> id
-	nextID       int            // next id to assign
+// keyIDPair holds a mapping from a specific byte slice to an ID.
+// We store these in a collision list for each hash bucket.
+type keyIDPair struct {
+	key []byte
+	id  int
 }
 
-// cloneEntry creates a deep copy of the pb.Entry.
+// uniCache is a concrete implementation of the UniCache interface.
+// It maintains:
+//   - store: a map[uint64][]keyIDPair for looking up ID by hashed key
+//   - cache: a map[int][]byte for looking up original key by ID
+//   - nextID: the next ID to assign when we see a new key
+type uniCache struct {
+	store  map[uint64][]keyIDPair // hash -> slice of (key, id) pairs (handles collisions)
+	cache  map[int][]byte         // id -> key bytes (used for decoding)
+	nextID int
+}
+
+// CloneEntry creates a deep copy of the pb.Entry.
 func CloneEntry(ent pb.Entry) pb.Entry {
 	newData := make([]byte, len(ent.Data))
 	copy(newData, ent.Data)
@@ -52,9 +66,9 @@ func CloneEntry(ent pb.Entry) pb.Entry {
 // NewUniCache creates a new uniCache instance.
 func NewUniCache() UniCache {
 	return &uniCache{
-		cache:        make(map[int][]byte),
-		reverseCache: make(map[string]int),
-		nextID:       1,
+		store:  make(map[uint64][]keyIDPair),
+		cache:  make(map[int][]byte),
+		nextID: 1,
 	}
 }
 
@@ -63,6 +77,45 @@ func (uc *uniCache) NewUniCache() UniCache {
 	return NewUniCache()
 }
 
+// hashKey computes a 64-bit hash of the provided key using xxhash.
+func (uc *uniCache) hashKey(key []byte) uint64 {
+	return xxhash.Sum64(key)
+}
+
+// lookupID checks if key already exists in the store map. If found, returns (id, true).
+// Otherwise, returns (0, false).
+func (uc *uniCache) lookupID(key []byte) (int, bool) {
+	h := uc.hashKey(key)
+	bucket := uc.store[h]
+	for _, pair := range bucket {
+		if len(pair.key) == len(key) && string(pair.key) == string(key) {
+			return pair.id, true
+		}
+	}
+	return 0, false
+}
+
+// storeKey assigns a new ID to key, saves it in both store (for future lookups) and
+// cache (for decoding), and returns the new ID.
+func (uc *uniCache) storeKey(key []byte) int {
+	newID := uc.nextID
+	uc.nextID++
+
+	// Make a copy of the key bytes to avoid unexpected mutations.
+	keyCopy := make([]byte, len(key))
+	copy(keyCopy, key)
+
+	// Insert into store
+	h := uc.hashKey(keyCopy)
+	uc.store[h] = append(uc.store[h], keyIDPair{key: keyCopy, id: newID})
+
+	// Insert into cache for decoding
+	uc.cache[newID] = keyCopy
+	return newID
+}
+
+// EncodeData modifies the provided data (proto message) in place if the key is already known,
+// or stores it in the cache if not. Returns the possibly updated data.
 func (uc *uniCache) EncodeData(data []byte) []byte {
 	if len(data) == 0 {
 		return data
@@ -80,7 +133,7 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 	}
 
 	// 3) Check if key is cached
-	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
+	if id, found := uc.lookupID(keyBytes); found {
 		// Already cached -> replace with varint
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
@@ -94,10 +147,7 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 		data = newData
 	} else {
 		// Cache miss -> store key
-		newID := uc.nextID
-		uc.nextID++
-		uc.cache[newID] = keyBytes
-		uc.reverseCache[string(keyBytes)] = newID
+		uc.storeKey(keyBytes)
 	}
 	return data
 }
@@ -124,7 +174,7 @@ func (uc *uniCache) EncodeEntry(entry pb.Entry) pb.Entry {
 	}
 
 	// Check if this key is already cached.
-	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
+	if id, found := uc.lookupID(keyBytes); found {
 		// Already cached: create a varint encoding of the id.
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		// Replace the key field (field 1) in the nested PutRequest with the encoded id.
@@ -138,20 +188,17 @@ func (uc *uniCache) EncodeEntry(entry pb.Entry) pb.Entry {
 			return entry
 		}
 		entry.Data = newData
-		//		fmt.Println("cache hit! new entry.Data:", entry.Data)
 	} else {
 		// Cache miss: add the key to the cache.
-		newID := uc.nextID
-		uc.nextID++
-		uc.cache[newID] = keyBytes
-		uc.reverseCache[string(keyBytes)] = newID
-		//		fmt.Println("cache miss for key:", keyBytes)
-		// Optionally, you could also choose to encode it right away.
+		newID := uc.storeKey(keyBytes)
+		_ = newID // if you want, you can also encode right away here
 	}
 
 	return entry
 }
 
+// DecodeEntry undoes the encoding: if the entry’s Data contains an integer
+// reference instead of a full key, it looks up the original bytes and restores them.
 func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 	if len(entry.Data) == 0 {
 		return entry
@@ -167,17 +214,17 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 		return entry
 	}
 	// If the field is encoded as BytesType, it’s already the full key.
+	// Just ensure it’s in the cache.
 	if wireType == protowire.BytesType {
-		if _, ok := uc.reverseCache[string(keyField)]; !ok {
-			newID := uc.nextID
-			uc.nextID++
-			uc.cache[newID] = keyField
-			uc.reverseCache[string(keyField)] = newID
-			//			fmt.Println("DecodeEntry - cache miss; adding key:", keyField)
+		// If we haven't seen this key, store it now.
+		if _, found := uc.lookupID(keyField); !found {
+			_ = uc.storeKey(keyField)
 		}
 		return entry
-	} else if wireType == protowire.VarintType {
-		// It is encoded as a varint: decode the id.
+	}
+
+	// If the field is a Varint, decode the id and restore the original key.
+	if wireType == protowire.VarintType {
 		id, n := protowire.ConsumeVarint(keyField)
 		if n <= 0 {
 			// Should not happen since wire type is Varint.
@@ -203,10 +250,10 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 		}
 		entry.Data = newData
 		return entry
-	} else {
-		// For any other wire type, return unchanged.
-		return entry
 	}
+
+	// For any other wire type, return unchanged.
+	return entry
 }
 
 // ReplaceProtoField is a helper that scans a protobuf-encoded message in data,
