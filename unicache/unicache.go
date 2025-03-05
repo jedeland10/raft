@@ -83,10 +83,7 @@ func (uc *uniCache) EncodeEntry(entry pb.Entry) pb.Entry {
 			return entry
 		}
 		entry.Data = newData
-		fmt.Println("cache hit! new data: ", entry.Data)
 	} else {
-
-		fmt.Println("cache miss for data: ", keyBytes)
 		// Key not in cache: assign a new id and add it.
 		id := uc.nextID
 		uc.nextID++
