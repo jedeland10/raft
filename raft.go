@@ -652,8 +652,20 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 	var entriesForFollower []pb.Entry
 	for _, ent := range ents {
-		entryCopy := unicache.CloneEntry(ent)
-		entryCopy = r.followerCache[to].EncodeEntry(entryCopy)
+		// Shallow-copy the struct fields, reusing the original ones.
+		// No separate allocation for Data yet.
+		entryCopy := pb.Entry{
+			Term:  ent.Term,
+			Index: ent.Index,
+			Type:  ent.Type,
+		}
+
+		// Encode (and potentially allocate new) data.
+		// If EncodeData always returns a new slice when changes are needed,
+		// we’re guaranteed not to mutate the storage-backed ent.Data.
+		entryCopy.Data = r.followerCache[to].EncodeData(ent.Data)
+
+		// Now append the newly formed pb.Entry to our outbound slice.
 		entriesForFollower = append(entriesForFollower, entryCopy)
 	}
 
@@ -1819,15 +1831,16 @@ func logSliceFromMsgApp(m *pb.Message) logSlice {
 // Also, if log is not matching leaders, check if we have
 // appended entries that were never committed(?)
 func (r *raft) handleAppendEntries(m pb.Message) {
-	// TODO(pav-kv): construct logSlice up the stack next to receiving the
-	// message, and validate it before taking any action (e.g. bumping term).
-	a := logSliceFromMsgApp(&m)
 
 	// Decode each entry so that if the leader sent an integer reference,
 	// we restore the original key bytes.
 	for i, ent := range m.Entries {
 		m.Entries[i] = r.uniCache.DecodeEntry(ent)
 	}
+
+	// TODO(pav-kv): construct logSlice up the stack next to receiving the
+	// message, and validate it before taking any action (e.g. bumping term).
+	a := logSliceFromMsgApp(&m)
 
 	if a.prev.index < r.raftLog.committed {
 		r.send(pb.Message{To: m.From, Type: pb.MsgAppResp, Index: r.raftLog.committed})
