@@ -37,8 +37,8 @@ func newRaftNode(id uint64, peers []raft.Peer) *raftNode {
 		ElectionTick:    10,
 		HeartbeatTick:   1,
 		Storage:         storage,
-		MaxSizePerMsg:   8192,
-		MaxInflightMsgs: 256,
+		MaxSizePerMsg:   1 * 1024 * 1024,
+		MaxInflightMsgs: 4096 / 8,
 	}
 	rn := &raftNode{
 		id:      id,
