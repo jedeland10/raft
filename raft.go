@@ -969,6 +969,7 @@ func (r *raft) becomeLeader() {
 	}
 
 	r.logger.Infof("Running jedeland10/raft")
+	r.logger.Infof("Running raft with no unicache")
 
 	// The payloadSize of an empty entry is 0 (see TestPayloadSizeOfEmptyEntry),
 	// so the preceding log append does not count against the uncommitted log
