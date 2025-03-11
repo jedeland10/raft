@@ -67,14 +67,9 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 	if len(data) == 0 {
 		return data
 	}
-	// 1) Extract rawPutBytes
-	rawPutBytes, _, err := GetProtoFieldAndWireType(data, 4)
-	if err != nil {
-		return data
-	}
 
 	// 2) Extract the keyBytes
-	keyBytes, _, err := GetProtoFieldAndWireType(rawPutBytes, cachedFieldNumber)
+	keyBytes, _, err := GetProtoFieldAndWireType(data, cachedFieldNumber)
 	if err != nil {
 		return data
 	}
@@ -83,11 +78,7 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
 		// Already cached -> replace with varint
 		encodedID := protowire.AppendVarint(nil, uint64(id))
-		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
-		if err != nil {
-			return data
-		}
-		newData, err := ReplaceProtoField(data, 4, newRawPutBytes, protowire.BytesType)
+		newData, err := ReplaceProtoField(keyBytes, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err != nil {
 			return data
 		}
