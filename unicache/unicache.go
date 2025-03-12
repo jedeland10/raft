@@ -34,9 +34,9 @@ type UniCache interface {
 // uniCache is a concrete implementation of the UniCache interface.
 // It maintains two maps: one from int -> []byte and a reverse map from key (as string) -> int.
 type uniCache struct {
-	cache        map[int][]byte // id -> key bytes
-	reverseCache map[string]int // key string -> id
-	nextID       int            // next id to assign
+	cache        map[int32][]byte // id -> key bytes
+	reverseCache map[string]int32 // key string -> id
+	nextID       int32            // next id to assign
 }
 
 // cloneEntry creates a deep copy of the pb.Entry.
@@ -54,8 +54,8 @@ func CloneEntry(ent pb.Entry) pb.Entry {
 // NewUniCache creates a new uniCache instance.
 func NewUniCache() UniCache {
 	return &uniCache{
-		cache:        make(map[int][]byte),
-		reverseCache: make(map[string]int),
+		cache:        make(map[int32][]byte),
+		reverseCache: make(map[string]int32),
 		nextID:       1,
 	}
 }
