@@ -12,6 +12,8 @@ import (
 // (Change this if your application uses a different field number.)
 const cachedFieldNumber = 1
 
+var cachehits = 0
+
 // UniCache is the interface that every Raft instance will implement.
 type UniCache interface {
 	// NewUniCache creates a new cache instance.
@@ -76,7 +78,11 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 
 	// 3) Check if key is cached
 	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
+		cachehits += 1
 		// Already cached -> replace with varint
+		if cachehits%500 == 0 {
+			fmt.Print("hits: ", cachehits)
+		}
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		newData, err := ReplaceProtoField(keyBytes, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err != nil {
