@@ -1832,7 +1832,6 @@ func logSliceFromMsgApp(m *pb.Message) logSlice {
 // Also, if log is not matching leaders, check if we have
 // appended entries that were never committed(?)
 func (r *raft) handleAppendEntries(m pb.Message) {
-
 	// Decode each entry so that if the leader sent an integer reference,
 	// we restore the original key bytes.
 	for i, ent := range m.Entries {
