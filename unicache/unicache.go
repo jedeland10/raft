@@ -32,9 +32,9 @@ type UniCache interface {
 // uniCache is a concrete implementation of the UniCache interface.
 // It maintains two maps: one from int -> []byte and a reverse map from key (as string) -> int.
 type uniCache struct {
-	cache        map[int][]byte // id -> key bytes
-	reverseCache map[string]int // key string -> id
-	nextID       int            // next id to assign
+	cache        map[uint32][]byte // id -> key bytes
+	reverseCache map[string]uint32 // key string -> id
+	nextID       uint32            // next id to assign
 }
 
 // cloneEntry creates a deep copy of the pb.Entry.
@@ -52,8 +52,8 @@ func CloneEntry(ent pb.Entry) pb.Entry {
 // NewUniCache creates a new uniCache instance.
 func NewUniCache() UniCache {
 	return &uniCache{
-		cache:        make(map[int][]byte),
-		reverseCache: make(map[string]int),
+		cache:        make(map[uint32][]byte),
+		reverseCache: make(map[string]uint32),
 		nextID:       1,
 	}
 }
@@ -194,7 +194,7 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 		// Decode the id.
 		id, _ := protowire.ConsumeVarint(fieldValue)
 		// Look up the key bytes in the cache.
-		keyBytes, ok := uc.cache[int(id)]
+		keyBytes, ok := uc.cache[uint32(id)]
 		if !ok {
 			// If the cache is missing the key, return the entry as is.
 			return entry
