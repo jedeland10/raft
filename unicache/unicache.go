@@ -32,9 +32,9 @@ type UniCache interface {
 // uniCache is a concrete implementation of the UniCache interface.
 // It maintains two maps: one from int -> []byte and a reverse map from key (as string) -> int.
 type uniCache struct {
-	cache        map[uint32][]byte // id -> key bytes
-	reverseCache map[string]uint32 // key string -> id
-	nextID       uint32            // next id to assign
+	cache        map[int][]byte // id -> key bytes
+	reverseCache map[string]int // key string -> id
+	nextID       int            // next id to assign
 }
 
 // cloneEntry creates a deep copy of the pb.Entry.
@@ -52,8 +52,8 @@ func CloneEntry(ent pb.Entry) pb.Entry {
 // NewUniCache creates a new uniCache instance.
 func NewUniCache() UniCache {
 	return &uniCache{
-		cache:        make(map[uint32][]byte),
-		reverseCache: make(map[string]uint32),
+		cache:        make(map[int][]byte),
+		reverseCache: make(map[string]int),
 		nextID:       1,
 	}
 }
@@ -77,7 +77,7 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 	// 3) Check if key is cached
 	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
 		encodedID := protowire.AppendVarint(nil, uint64(id))
-		newData, err := ReplaceProtoFieldInPlaceCompress(keyBytes, cachedFieldNumber, encodedID, protowire.VarintType)
+		newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err != nil {
 			return data
 		}
@@ -108,7 +108,7 @@ func (uc *uniCache) EncodeEntry(entry pb.Entry) pb.Entry {
 		// Create a new varint value representing the id.
 		newValue := protowire.AppendVarint(nil, uint64(id))
 		// Replace the field (with field number cachedFieldNumber) with the id (and wire type Varint).
-		newData, err := ReplaceProtoFieldInPlaceCompress(entry.Data, cachedFieldNumber, newValue, protowire.VarintType)
+		newData, err := ReplaceProtoField(entry.Data, cachedFieldNumber, newValue, protowire.VarintType)
 		if err != nil {
 			// In case of error (e.g. parsing problem), return the entry unchanged.
 			return entry
@@ -194,7 +194,7 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 		// Decode the id.
 		id, _ := protowire.ConsumeVarint(fieldValue)
 		// Look up the key bytes in the cache.
-		keyBytes, ok := uc.cache[uint32(id)]
+		keyBytes, ok := uc.cache[int(id)]
 		if !ok {
 			// If the cache is missing the key, return the entry as is.
 			return entry
@@ -305,6 +305,7 @@ func ReplaceProtoFieldInPlaceCompress(data []byte, targetField int, newValue []b
 		start := i
 		// Consume the tag.
 		fieldNum, wireType, n := protowire.ConsumeTag(data[i:])
+		fmt.Println("fieldnum: ", fieldNum, "wiretype", wireType)
 		if n < 0 {
 			return nil, errors.New("failed to consume tag")
 		}
