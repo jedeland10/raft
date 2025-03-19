@@ -9,6 +9,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.4
 	github.com/stretchr/testify v1.10.0
+	go.etcd.io/raft/v3 v3.6.0
 )
 
 require (
