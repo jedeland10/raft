@@ -81,7 +81,6 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 
 	// 3) Check if key is cached
 	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
-		// Already cached -> replace with varint
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err != nil {
@@ -93,7 +92,6 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 		}
 		data = newData
 	} else {
-		// Cache miss -> store key
 		newID := uc.nextID
 		uc.nextID++
 		uc.cache[newID] = keyBytes
