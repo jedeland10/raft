@@ -1,6 +1,7 @@
 package unicache
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 
@@ -9,44 +10,33 @@ import (
 )
 
 // cachedFieldNumber is the protobuf field number that we want to cache.
-// (Change this if your application uses a different field number.)
 const cachedFieldNumber = 1
+
+// maxCacheSize defines the maximum number of entries in the cache.
+const maxCacheSize = 1000
 
 // UniCache is the interface that every Raft instance will implement.
 type UniCache interface {
-	// NewUniCache creates a new cache instance.
 	NewUniCache() UniCache
-
 	EncodeData(data []byte) []byte
-
-	// EncodeEntry processes a Raft log entry: it looks for the cached field in the
-	// entry’s Data and, if the field has been seen before, replaces its full value
-	// with a small integer reference.
 	EncodeEntry(entry pb.Entry) pb.Entry
-
-	// DecodeEntry undoes the encoding: if the entry’s Data contains an integer
-	// reference instead of a full key, it looks up the original bytes and restores them.
 	DecodeEntry(entry pb.Entry) pb.Entry
 }
 
-// uniCache is a concrete implementation of the UniCache interface.
-// It maintains two maps: one from int -> []byte and a reverse map from key (as string) -> int.
-type uniCache struct {
-	cache        map[int][]byte // id -> key bytes
-	reverseCache map[string]int // key string -> id
-	nextID       int            // next id to assign
+// cacheEntry is used to store cache information for LRU eviction.
+type cacheEntry struct {
+	id  int
+	key []byte
 }
 
-// cloneEntry creates a deep copy of the pb.Entry.
-func CloneEntry(ent pb.Entry) pb.Entry {
-	newData := make([]byte, len(ent.Data))
-	copy(newData, ent.Data)
-	return pb.Entry{
-		Term:  ent.Term,
-		Index: ent.Index,
-		Type:  ent.Type,
-		Data:  newData,
-	}
+// uniCache is a concrete implementation of the UniCache interface.
+type uniCache struct {
+	cache        map[int][]byte        // id -> key bytes
+	reverseCache map[string]int        // key string -> id
+	lruList      *list.List            // Doubly linked list to track LRU order.
+	lruMap       map[int]*list.Element // mapping from id to list element
+	nextID       int                   // next id to assign
+	capacity     int                   // maximum number of cache entries
 }
 
 // NewUniCache creates a new uniCache instance.
@@ -54,7 +44,10 @@ func NewUniCache() UniCache {
 	return &uniCache{
 		cache:        make(map[int][]byte),
 		reverseCache: make(map[string]int),
+		lruList:      list.New(),
+		lruMap:       make(map[int]*list.Element),
 		nextID:       1,
+		capacity:     maxCacheSize,
 	}
 }
 
@@ -63,24 +56,58 @@ func (uc *uniCache) NewUniCache() UniCache {
 	return NewUniCache()
 }
 
+// updateLRU moves the element for the given id to the front of the LRU list.
+func (uc *uniCache) updateLRU(id int) {
+	if elem, ok := uc.lruMap[id]; ok {
+		uc.lruList.MoveToFront(elem)
+	}
+}
+
+// addToLRU adds a new cache entry to the LRU list.
+func (uc *uniCache) addToLRU(id int, key []byte) {
+	entry := cacheEntry{id: id, key: key}
+	elem := uc.lruList.PushFront(entry)
+	uc.lruMap[id] = elem
+	// Evict if we exceed capacity.
+	if uc.lruList.Len() > uc.capacity {
+		uc.evictLRU()
+	}
+}
+
+// evictLRU removes the least recently used item from the cache.
+func (uc *uniCache) evictLRU() {
+	elem := uc.lruList.Back()
+	if elem == nil {
+		return
+	}
+	entry := elem.Value.(cacheEntry)
+	// Remove from all maps.
+	delete(uc.cache, entry.id)
+	delete(uc.reverseCache, string(entry.key))
+	delete(uc.lruMap, entry.id)
+	uc.lruList.Remove(elem)
+}
+
+// EncodeData and EncodeEntry update the cache and record access in the LRU list.
 func (uc *uniCache) EncodeData(data []byte) []byte {
 	if len(data) == 0 {
 		return data
 	}
-	// 1) Extract rawPutBytes
+	// 1) Extract rawPutBytes.
 	rawPutBytes, _, err := GetProtoFieldAndWireType(data, 4)
 	if err != nil {
 		return data
 	}
-
-	// 2) Extract the keyBytes
+	// 2) Extract the keyBytes.
 	keyBytes, _, err := GetProtoFieldAndWireType(rawPutBytes, cachedFieldNumber)
 	if err != nil {
 		return data
 	}
-
-	// 3) Check if key is cached
-	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
+	keyStr := string(keyBytes)
+	// 3) Check if key is cached.
+	if id, ok := uc.reverseCache[keyStr]; ok {
+		// Update LRU status.
+		uc.updateLRU(id)
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err != nil {
@@ -90,12 +117,14 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 		if err != nil {
 			return data
 		}
-		data = newData
+		return newData
 	} else {
+		// Cache miss: add the key.
 		newID := uc.nextID
 		uc.nextID++
 		uc.cache[newID] = keyBytes
-		uc.reverseCache[string(keyBytes)] = newID
+		uc.reverseCache[keyStr] = newID
+		uc.addToLRU(newID, keyBytes)
 	}
 	return data
 }
@@ -107,46 +136,35 @@ func (uc *uniCache) EncodeEntry(entry pb.Entry) pb.Entry {
 	if len(entry.Data) == 0 {
 		return entry
 	}
-	// Get the PutRequest field from the parent message (InternalRaftRequest)
 	rawPutBytes, _, err := GetProtoFieldAndWireType(entry.Data, 4)
 	if err != nil {
-		// Put field not found – nothing to cache.
 		return entry
 	}
-
-	// Extract the key from the nested PutRequest (field 1)
 	keyBytes, _, err := GetProtoFieldAndWireType(rawPutBytes, cachedFieldNumber)
 	if err != nil {
-		// Key field not found; nothing to do.
 		return entry
 	}
-
-	// Check if this key is already cached.
-	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
-		// Already cached: create a varint encoding of the id.
+	keyStr := string(keyBytes)
+	if id, ok := uc.reverseCache[keyStr]; ok {
+		// Update LRU status.
+		uc.updateLRU(id)
 		encodedID := protowire.AppendVarint(nil, uint64(id))
-		// Replace the key field (field 1) in the nested PutRequest with the encoded id.
 		newRawPutBytes, err := ReplaceProtoFieldInPlaceCompress(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err != nil {
 			return entry
 		}
-		// Replace the PutRequest field (field 4) in the overall entry with the updated nested bytes.
 		newData, err := ReplaceProtoFieldInPlaceCompress(entry.Data, 4, newRawPutBytes, protowire.BytesType)
 		if err != nil {
 			return entry
 		}
 		entry.Data = newData
-		//		fmt.Println("cache hit! new entry.Data:", entry.Data)
 	} else {
-		// Cache miss: add the key to the cache.
 		newID := uc.nextID
 		uc.nextID++
 		uc.cache[newID] = keyBytes
-		uc.reverseCache[string(keyBytes)] = newID
-		//		fmt.Println("cache miss for key:", keyBytes)
-		// Optionally, you could also choose to encode it right away.
+		uc.reverseCache[keyStr] = newID
+		uc.addToLRU(newID, keyBytes)
 	}
-
 	return entry
 }
 
@@ -154,46 +172,42 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 	if len(entry.Data) == 0 {
 		return entry
 	}
-	// Get the nested PutRequest field.
 	rawPutBytes, _, err := GetProtoFieldAndWireType(entry.Data, 4)
 	if err != nil {
 		return entry
 	}
-	// Get the key field from the nested PutRequest along with its wire type.
 	keyField, wireType, err := GetProtoFieldAndWireType(rawPutBytes, cachedFieldNumber)
 	if err != nil {
 		return entry
 	}
-	// If the field is encoded as BytesType, it’s already the full key.
 	if wireType == protowire.BytesType {
-		if _, ok := uc.reverseCache[string(keyField)]; !ok {
+		keyStr := string(keyField)
+		if id, ok := uc.reverseCache[keyStr]; !ok {
 			newID := uc.nextID
 			uc.nextID++
 			uc.cache[newID] = keyField
-			uc.reverseCache[string(keyField)] = newID
-			//			fmt.Println("DecodeEntry - cache miss; adding key:", keyField)
+			uc.reverseCache[keyStr] = newID
+			uc.addToLRU(newID, keyField)
+		} else {
+			uc.updateLRU(id)
 		}
 		return entry
 	} else if wireType == protowire.VarintType {
-		// It is encoded as a varint: decode the id.
 		id, n := protowire.ConsumeVarint(keyField)
 		if n <= 0 {
-			// Should not happen since wire type is Varint.
 			return entry
 		}
-		// Look up the original key from the cache.
 		origKey, ok := uc.cache[int(id)]
 		if !ok {
 			fmt.Println("DecodeEntry - id not found in cache:", id)
 			return entry
 		}
-		// Replace the key field in the nested PutRequest with the original key bytes.
+		uc.updateLRU(int(id))
 		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, origKey, protowire.BytesType)
 		if err != nil {
 			fmt.Println("DecodeEntry - error replacing key field:", err)
 			return entry
 		}
-		// Replace the PutRequest field in the overall entry.
 		newData, err := ReplaceProtoField(entry.Data, 4, newRawPutBytes, protowire.BytesType)
 		if err != nil {
 			fmt.Println("DecodeEntry - error replacing nested PutRequest field:", err)
@@ -202,10 +216,12 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 		entry.Data = newData
 		return entry
 	} else {
-		// For any other wire type, return unchanged.
 		return entry
 	}
 }
+
+// ReplaceProtoField, ReplaceProtoFieldInPlaceCompress, and GetProtoFieldAndWireType
+// remain unchanged and are used for protobuf field manipulation.
 
 // ReplaceProtoField is a helper that scans a protobuf-encoded message in data,
 // and whenever it finds a field with number targetField it replaces that field’s value
