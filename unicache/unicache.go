@@ -12,8 +12,6 @@ import (
 // (Change this if your application uses a different field number.)
 const cachedFieldNumber = 1
 
-var cachehits = 0
-
 // UniCache is the interface that every Raft instance will implement.
 type UniCache interface {
 	// NewUniCache creates a new cache instance.
