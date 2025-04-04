@@ -83,7 +83,6 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 
 	// 3) Check if key is cached
 	if id, ok := uc.reverseCache[string(keyBytes)]; ok {
-		cachehits++
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err != nil {
@@ -94,11 +93,6 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 			return data
 		}
 
-		if cachehits%5000 == 0 {
-			fmt.Println("cachehits", cachehits)
-			fmt.Println("decoded size: ", len(data))
-			fmt.Println("encoded size: ", len(newData))
-		}
 		data = newData
 	} else {
 		newID := uc.nextID
