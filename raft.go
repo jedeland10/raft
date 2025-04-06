@@ -1833,12 +1833,9 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 	// Decode each entry so that if the leader sent an integer reference,
 	// we restore the original key bytes.
 
-	entriesHandling := make([]pb.Entry, len(m.Entries))
 	for i, ent := range m.Entries {
-		entryCopy := unicache.CloneEntry(ent)
-		entriesHandling[i] = r.uniCache.DecodeEntry(entryCopy)
+		m.Entries[i] = r.uniCache.DecodeEntry(ent)
 	}
-	m.Entries = entriesHandling
 
 	// TODO(pav-kv): construct logSlice up the stack next to receiving the
 	// message, and validate it before taking any action (e.g. bumping term).

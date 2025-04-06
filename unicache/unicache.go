@@ -9,13 +9,10 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
-// cachedFieldNumber is the protobuf field number that we want to cache.
 const cachedFieldNumber = 1
 
-// maxCacheSize defines the maximum number of entries in the cache.
-const maxCacheSize = 1000
+const maxCacheSize = 5
 
-// UniCache is the interface that every Raft instance will implement.
 type UniCache interface {
 	NewUniCache() UniCache
 	EncodeData(data []byte) []byte
@@ -23,23 +20,20 @@ type UniCache interface {
 	DecodeEntry(entry pb.Entry) pb.Entry
 }
 
-// cacheEntry is used to store cache information for LRU eviction.
 type cacheEntry struct {
 	id  int
 	key []byte
 }
 
-// uniCache is a concrete implementation of the UniCache interface.
 type uniCache struct {
-	cache        map[int][]byte        // id -> key bytes
-	reverseCache map[string]int        // key string -> id
-	lruList      *list.List            // Doubly linked list to track LRU order.
-	lruMap       map[int]*list.Element // mapping from id to list element
-	nextID       int                   // next id to assign
-	capacity     int                   // maximum number of cache entries
+	cache        map[int][]byte
+	reverseCache map[string]int
+	lruList      *list.List
+	lruMap       map[int]*list.Element
+	nextID       int
+	capacity     int
 }
 
-// NewUniCache creates a new uniCache instance.
 func NewUniCache() UniCache {
 	return &uniCache{
 		cache:        make(map[int][]byte),
@@ -56,55 +50,51 @@ func (uc *uniCache) NewUniCache() UniCache {
 	return NewUniCache()
 }
 
-// updateLRU moves the element for the given id to the front of the LRU list.
 func (uc *uniCache) updateLRU(id int) {
 	if elem, ok := uc.lruMap[id]; ok {
 		uc.lruList.MoveToFront(elem)
 	}
 }
 
-// addToLRU adds a new cache entry to the LRU list.
 func (uc *uniCache) addToLRU(id int, key []byte) {
 	entry := cacheEntry{id: id, key: key}
 	elem := uc.lruList.PushFront(entry)
 	uc.lruMap[id] = elem
-	// Evict if we exceed capacity.
+
 	if uc.lruList.Len() > uc.capacity {
 		uc.evictLRU()
 	}
 }
 
-// evictLRU removes the least recently used item from the cache.
 func (uc *uniCache) evictLRU() {
 	elem := uc.lruList.Back()
 	if elem == nil {
 		return
 	}
 	entry := elem.Value.(cacheEntry)
-	// Remove from all maps.
+
 	delete(uc.cache, entry.id)
 	delete(uc.reverseCache, string(entry.key))
 	delete(uc.lruMap, entry.id)
 	uc.lruList.Remove(elem)
 }
 
-// EncodeData and EncodeEntry update the cache and record access in the LRU list.
 func (uc *uniCache) EncodeData(data []byte) []byte {
 	if len(data) == 0 {
 		return data
 	}
-	// 1) Extract rawPutBytes.
+	// Extracts rawPutBytes: bytes representing the put operation
 	rawPutBytes, _, err := GetProtoFieldAndWireType(data, 4)
 	if err != nil {
 		return data
 	}
-	// 2) Extract the keyBytes.
+	// Extract the keyBytes: bytes representing the field to be encoded.
 	keyBytes, _, err := GetProtoFieldAndWireType(rawPutBytes, cachedFieldNumber)
 	if err != nil {
 		return data
 	}
 	keyStr := string(keyBytes)
-	// 3) Check if key is cached.
+	// Check if field is cached
 	if id, ok := uc.reverseCache[keyStr]; ok {
 		// Update LRU status.
 		uc.updateLRU(id)
@@ -119,7 +109,7 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 		}
 		return newData
 	} else {
-		// Cache miss: add the key.
+		// Cache miss: add the field to cache
 		newID := uc.nextID
 		uc.nextID++
 		uc.cache[newID] = keyBytes
@@ -129,9 +119,6 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 	return data
 }
 
-// EncodeEntry looks into the PutRequest (field 4) of entry.Data,
-// then into its key (field 1). If that key has been seen before, it replaces
-// the key with a varint–encoded id; otherwise, it adds the key to the cache.
 func (uc *uniCache) EncodeEntry(entry pb.Entry) pb.Entry {
 	if len(entry.Data) == 0 {
 		return entry
@@ -219,9 +206,6 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) pb.Entry {
 		return entry
 	}
 }
-
-// ReplaceProtoField, ReplaceProtoFieldInPlaceCompress, and GetProtoFieldAndWireType
-// remain unchanged and are used for protobuf field manipulation.
 
 // ReplaceProtoField is a helper that scans a protobuf-encoded message in data,
 // and whenever it finds a field with number targetField it replaces that field’s value
@@ -386,7 +370,6 @@ func ReplaceProtoFieldInPlaceCompress(data []byte, targetField int, newValue []b
 	for _, f := range fields {
 		newTotalLen += f.newLen
 	}
-	// In a compressing scenario, newTotalLen is guaranteed to be <= len(data).
 
 	// Second pass: Copy fields backwards to avoid overwriting data that hasn't been moved.
 	writePos := newTotalLen
