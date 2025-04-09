@@ -71,7 +71,8 @@ func TestCacheEviction(t *testing.T) {
 			Type:  entry.Type,
 		}
 		// The EncodeEntry method updates the cache's internal state.
-		entryCopy.Data = cache.EncodeData(entry.Data)
+		var nextID uint32 = 1
+		entryCopy.Data = cache.EncodeData(entry.Data, &nextID)
 	}
 
 	// Check that the internal cache map size is equal to the capacity (i.e., eviction occurred).

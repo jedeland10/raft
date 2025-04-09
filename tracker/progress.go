@@ -40,6 +40,10 @@ type Progress struct {
 	// In StateSnapshot, Next == PendingSnapshot + 1.
 	Next uint64
 
+	// UniCacheNext is the next integer to
+	// be used to encode an entry
+	NextCacheId uint32
+
 	// sentCommit is the highest commit index in flight to the follower.
 	//
 	// Generally, it is monotonic, but con regress in some cases, e.g. when
@@ -234,6 +238,7 @@ func (pr *Progress) MaybeDecrTo(rejected, matchHint uint64) bool {
 		//
 		// TODO(tbg): why not use matchHint if it's larger?
 		pr.Next = pr.Match + 1
+
 		// Regress the sentCommit since it unlikely has been applied.
 		pr.sentCommit = min(pr.sentCommit, pr.Next-1)
 		return true
