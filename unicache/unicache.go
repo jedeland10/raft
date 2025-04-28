@@ -78,7 +78,7 @@ func (uc *uniCache) EncodeData(data []byte, nextId *uint32) []byte {
 		uc.updateLRU(id)
 		// Build varint encoding
 		encodedID := protowire.AppendVarint(nil, uint64(id))
-		newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
+		newData, err := ReplaceProtoFieldInPlaceCompress(data, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err == nil {
 			return newData
 		}
@@ -242,6 +242,97 @@ func ReplaceProtoField(data []byte, targetField int, newValue []byte, newWireTyp
 		data = data[skip:]
 	}
 	return out, nil
+}
+func ReplaceProtoFieldInPlaceCompress(data []byte, targetField int, newValue []byte, newWireType protowire.Type) ([]byte, error) {
+	type fieldInfo struct {
+		start    int
+		end      int
+		isTarget bool
+		newLen   int
+	}
+	var fields []fieldInfo
+	i := 0
+	for i < len(data) {
+		start := i
+		fieldNum, wireType, n := protowire.ConsumeTag(data[i:])
+		if n < 0 {
+			return nil, errors.New("bad tag")
+		}
+		i += n
+
+		var oldValLen int
+		switch wireType {
+		case protowire.VarintType:
+			_, vLen := protowire.ConsumeVarint(data[i:])
+			oldValLen = vLen
+		case protowire.BytesType:
+			_, vLen := protowire.ConsumeBytes(data[i:])
+			oldValLen = vLen
+		default:
+			skip, _ := skipField(wireType, data[i:])
+			i += skip
+			continue
+		}
+		end := i + oldValLen
+
+		isTarget := int(fieldNum) == targetField
+		newLen := end - start
+		if isTarget {
+			newTag := protowire.AppendTag(nil, protowire.Number(targetField), newWireType)
+			var newField []byte
+			if newWireType == protowire.BytesType {
+				newField = protowire.AppendBytes(nil, newValue)
+			} else {
+				newField = newValue
+			}
+			newLen = len(newTag) + len(newField)
+			if newLen > end-start {
+				return nil, fmt.Errorf("new field encoding is larger than original")
+			}
+		}
+		fields = append(fields, fieldInfo{start, end, isTarget, newLen})
+		i = end
+	}
+
+	// compute total
+	newTotal := 0
+	for _, f := range fields {
+		newTotal += f.newLen
+	}
+	writePos := newTotal
+	for j := len(fields) - 1; j >= 0; j-- {
+		f := fields[j]
+		writePos -= f.newLen
+		if f.isTarget {
+			newTag := protowire.AppendTag(nil, protowire.Number(targetField), newWireType)
+			var newField []byte
+			if newWireType == protowire.BytesType {
+				newField = protowire.AppendBytes(nil, newValue)
+			} else {
+				newField = newValue
+			}
+			copy(data[writePos:], newTag)
+			copy(data[writePos+len(newTag):], newField)
+		} else {
+			copy(data[writePos:], data[f.start:f.end])
+		}
+	}
+
+	return data[:newTotal], nil
+}
+
+func skipField(wt protowire.Type, data []byte) (int, error) {
+	switch wt {
+	case protowire.Fixed32Type:
+		return 4, nil
+	case protowire.Fixed64Type:
+		return 8, nil
+	case protowire.StartGroupType:
+		_, n := protowire.ConsumeGroup(0, data)
+		return n, nil
+	default:
+		return 0, fmt.Errorf("unsupported wire type %v", wt)
+	}
 }
 
 // GetProtoFieldAndWireType scans the provided protobuf-encoded data looking for the first
