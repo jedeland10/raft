@@ -20,7 +20,8 @@ import (
 	"sync/atomic"
 
 	"github.com/gogo/protobuf/proto"
-	pb "github.com/jedeland10/raft/raftpb"
+	"go.etcd.io/raft/v3/kvop"
+	pb "go.etcd.io/raft/v3/raftpb"
 )
 
 type SnapshotStatus int
@@ -479,7 +480,7 @@ func (n *node) Propose(ctx context.Context, data []byte) error {
 	randKey := make([]byte, 50)
 	val8 := make([]byte, 8)
 
-	msg := &pb.MyKV{
+	msg := &kvop.MyKV{
 		Key:        randKey,
 		Value:      val8,
 		ProposalID: n.nextProposalID(),

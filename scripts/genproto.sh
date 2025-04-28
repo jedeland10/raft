@@ -28,7 +28,7 @@ echo "  - gogoproto-root:          ${GOGOPROTO_ROOT}"
 GOGOPROTO_PATH="${GOGOPROTO_ROOT}:${GOGOPROTO_ROOT}/protobuf"
 
 # directories containing protos to be built
-DIRS="./raftpb"
+DIRS="./raftpb ./kvop"
 
 log_callout -e "\\nRunning gofast (gogo) proto generation..."
 
