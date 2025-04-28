@@ -17,7 +17,9 @@ package raft
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
+	"github.com/jedeland10/raft/raftpb"
 	pb "go.etcd.io/raft/v3/raftpb"
 )
 
@@ -27,6 +29,11 @@ const (
 	SnapshotFinish  SnapshotStatus = 1
 	SnapshotFailure SnapshotStatus = 2
 )
+
+func (n *node) nextProposalID() uint64 {
+	// atomically increment and return a new proposal ID
+	return atomic.AddUint64(&n.proposalIDGen, 1)
+}
 
 var (
 	emptyState = pb.HardState{}
@@ -306,6 +313,8 @@ type node struct {
 	stop       chan struct{}
 	status     chan chan Status
 
+	proposalIDGen uint64
+
 	rn *RawNode
 }
 
@@ -467,7 +476,16 @@ func (n *node) Tick() {
 func (n *node) Campaign(ctx context.Context) error { return n.step(ctx, pb.Message{Type: pb.MsgHup}) }
 
 func (n *node) Propose(ctx context.Context, data []byte) error {
-	return n.stepWait(ctx, pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Data: []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")}}})
+	randKey := make([]byte, 60)
+	val8 := make([]byte, 8)
+
+	msg := &raftpb.MyKV{
+		Key:        randKey,
+		Value:      val8,
+		ProposalID: n.nextProposalID(),
+	}
+
+	return n.stepWait(ctx, pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Data: msg}}})
 }
 
 func (n *node) Step(ctx context.Context, m pb.Message) error {
