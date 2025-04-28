@@ -19,8 +19,8 @@ import (
 	"errors"
 	"sync/atomic"
 
-	"github.com/jedeland10/raft/raftpb"
-	pb "go.etcd.io/raft/v3/raftpb"
+	"github.com/gogo/protobuf/proto"
+	pb "github.com/jedeland10/raft/raftpb"
 )
 
 type SnapshotStatus int
@@ -476,16 +476,20 @@ func (n *node) Tick() {
 func (n *node) Campaign(ctx context.Context) error { return n.step(ctx, pb.Message{Type: pb.MsgHup}) }
 
 func (n *node) Propose(ctx context.Context, data []byte) error {
-	randKey := make([]byte, 60)
+	randKey := make([]byte, 50)
 	val8 := make([]byte, 8)
 
-	msg := &raftpb.MyKV{
+	msg := &pb.MyKV{
 		Key:        randKey,
 		Value:      val8,
 		ProposalID: n.nextProposalID(),
 	}
+	payload, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
 
-	return n.stepWait(ctx, pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Data: msg}}})
+	return n.stepWait(ctx, pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Data: payload}}})
 }
 
 func (n *node) Step(ctx context.Context, m pb.Message) error {
