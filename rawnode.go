@@ -165,21 +165,25 @@ func (rn *RawNode) readyWithoutAccept() Ready {
 
 	for i := range rd.Entries {
 		if rd.Entries[i].Type == pb.EntryNormal {
+			fmt.Println("appended encoded: ", rd.Entries[i].Data)
 			if decoded, ok := rn.raft.uniCache.DecodeEntry(rd.Entries[i], true); ok {
 				rd.Entries[i] = decoded
 			} else {
 				panic(fmt.Sprintf("cache decode failed for index %d", rd.Entries[i].Index))
 			}
+			fmt.Println("appended decoded: ", rd.Entries[i].Data)
 		}
 	}
 
 	for i := range rd.CommittedEntries {
 		if rd.CommittedEntries[i].Type == pb.EntryNormal {
+			fmt.Println("committed encoded: ", rd.CommittedEntries[i].Data)
 			decoded, ok := rn.raft.uniCache.DecodeEntry(rd.CommittedEntries[i], false)
 			if !ok {
 				panic(fmt.Sprintf("cache decode failed for index %d", rd.CommittedEntries[i].Index))
 			}
 			rd.CommittedEntries[i] = decoded
+			fmt.Println("committed decoded: ", rd.CommittedEntries[i].Data)
 		}
 	}
 

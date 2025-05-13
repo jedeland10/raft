@@ -115,10 +115,15 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 	if ok && id < uc.nextID {
 
 		encodedID := protowire.AppendVarint(nil, uint64(id))
-		newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
-		if err == nil {
-			return newData
+		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, encodedID, protowire.VarintType)
+		if err != nil {
+			return data
 		}
+		newData, err := ReplaceProtoField(data, 4, newRawPutBytes, protowire.BytesType)
+		if err != nil {
+			return data
+		}
+		return newData
 	}
 
 	return data
@@ -169,10 +174,17 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry, touchLRU bool) (pb.Entry, bool) 
 		if touchLRU {
 			uc.updateLRU(uint32(id))
 		}
-		newData, err := ReplaceProtoField(entry.Data, cachedFieldNumber, origKey, protowire.BytesType)
-		if err == nil {
-			entry.Data = newData
+		newRawPutBytes, err := ReplaceProtoField(rawPutBytes, cachedFieldNumber, origKey, protowire.BytesType)
+		if err != nil {
+			fmt.Println("DecodeEntry - error replacing key field:", err)
+			return entry, false
 		}
+		newData, err := ReplaceProtoField(entry.Data, 4, newRawPutBytes, protowire.BytesType)
+		if err != nil {
+			fmt.Println("DecodeEntry - error replacing nested PutRequest field:", err)
+			return entry, false
+		}
+		entry.Data = newData
 		return entry, true
 	} else {
 		return entry, true
