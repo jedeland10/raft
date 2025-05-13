@@ -97,11 +97,15 @@ func (uc *uniCache) EncodeData(data []byte) []byte {
 		return data
 	}
 
-	keyBytes, _, err := GetProtoFieldAndWireType(data, cachedFieldNumber)
+	rawPutBytes, _, err := GetProtoFieldAndWireType(data, 4)
 	if err != nil {
 		return data
 	}
 
+	keyBytes, _, err := GetProtoFieldAndWireType(rawPutBytes, cachedFieldNumber)
+	if err != nil {
+		return data
+	}
 	uc.mu.Lock()
 	defer uc.mu.Unlock()
 
@@ -126,7 +130,12 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry, touchLRU bool) (pb.Entry, bool) 
 		return entry, true
 	}
 
-	keyField, wireType, err := GetProtoFieldAndWireType(entry.Data, cachedFieldNumber)
+	rawPutBytes, _, err := GetProtoFieldAndWireType(entry.Data, 4)
+	if err != nil {
+		return entry, true
+	}
+
+	keyField, wireType, err := GetProtoFieldAndWireType(rawPutBytes, cachedFieldNumber)
 	if err != nil {
 		return entry, true
 	}
