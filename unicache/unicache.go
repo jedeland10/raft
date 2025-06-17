@@ -257,7 +257,6 @@ func (uc *uniCache) EncodeData(data []byte, appendIdx uint64) []byte {
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err == nil {
-			elem.lastIdx = appendIdx
 			fmt.Printf("[EncodeData] index=%d sending cached ID=%d keyHash=%x ncached=%d\n", appendIdx, id, sha256.Sum256(keyBytes), nCached)
 			return newData
 		}
