@@ -17,7 +17,7 @@ const maxCacheSize = 1000
 
 // UniCache defines methods for encoding/decoding entries with key caching.
 type UniCache interface {
-	NewUniCache(maxCommit *uint64, minCacheVersion func() uint64) UniCache
+	NewUniCache(maxCommit *uint64, minCacheVersion func() uint64, capacity int) UniCache
 	EncodeData(data []byte) ([]byte, uint32)
 	DecodeEntry(entry pb.Entry) (pb.Entry, bool)
 	SafeEncode(data []byte, appendIdx uint64, encodedID uint32) ([]byte, []byte)
@@ -57,7 +57,7 @@ type uniCache struct {
 }
 
 // NewUniCache constructs a UniCache with simple LRU caching.
-func NewUniCache(maxCommit *uint64, minCacheVersion func() uint64) UniCache {
+func NewUniCache(maxCommit *uint64, minCacheVersion func() uint64, capacity int) UniCache {
 	return &uniCache{
 		cache:        make(map[uint32]*cacheEntry),
 		reverseCache: make(map[string]uint32),
@@ -66,7 +66,7 @@ func NewUniCache(maxCommit *uint64, minCacheVersion func() uint64) UniCache {
 		lruMap:  make(map[uint32]*list.Element),
 
 		nextID:   1,
-		capacity: maxCacheSize,
+		capacity: capacity,
 
 		evicted:    make(map[uint32]*list.Element),
 		evictOrder: list.New(),
@@ -88,8 +88,8 @@ func (uc *uniCache) ResetCacheHits() uint64 {
 }
 
 // NewUniCache implements the UniCache interface.
-func (uc *uniCache) NewUniCache(maxCommit *uint64, minCacheVersion func() uint64) UniCache {
-	return NewUniCache(maxCommit, minCacheVersion)
+func (uc *uniCache) NewUniCache(maxCommit *uint64, minCacheVersion func() uint64, capacity int) UniCache {
+	return NewUniCache(maxCommit, minCacheVersion, capacity)
 }
 
 func (uc *uniCache) updateLRU(id uint32) {
