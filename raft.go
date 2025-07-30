@@ -475,7 +475,7 @@ func newRaft(c *Config) *raft {
 		traceLogger:                 c.TraceLogger,
 	}
 
-	if c.UniCacheSize >= 0 {
+	if c.UniCacheSize > 0 {
 		r.uniCache = unicache.NewUniCache(&r.raftLog.committed, r.trk.MinCacheIdxMatch, c.UniCacheSize)
 	} else {
 		r.uniCache = nil
