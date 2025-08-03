@@ -159,6 +159,9 @@ func (uc *uniCache) PurgeEvicted(currIdx uint64) {
 			break
 		}
 		e := front.Value.(*cacheEntry)
+		if e.lastIdx >= window {
+			break
+		}
 		uc.evictOrder.Remove(front)
 		delete(uc.evicted, e.id)
 	}
