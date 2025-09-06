@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -175,15 +176,17 @@ func (uc *uniCache) GetNextId() uint32 {
 }
 
 func (uc *uniCache) PrintCache() {
-	uc.mu.RLock()
 	fmt.Println("len cache: ", len(uc.cache), "len evicted", len(uc.evicted), "nextId:", uc.nextID)
-	uc.mu.RUnlock()
-	/*keys := make([]uint32, 0, len(uc.cache))
+	keys := make([]uint32, 0, len(uc.cache))
+	vals := make([]string, 0, len(uc.cache))
 	for k := range uc.cache {
 		keys = append(keys, k)
+		vals = append(vals, string(uc.cache[k].key))
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-	fmt.Println("keys", keys)*/
+	sort.Slice(vals, func(i, j int) bool { return keys[i] < keys[j] })
+	fmt.Println("keys", keys)
+	fmt.Println("vals", vals)
 }
 
 func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) ([]byte, []byte) {
