@@ -201,6 +201,7 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 
 			fullData, err := ReplaceProtoField(data, cachedFieldNumber, elem.key, protowire.BytesType)
 			if err == nil {
+				elem.lastIdx = appendIdx
 				return data, fullData
 			}
 		}
@@ -293,6 +294,7 @@ func (uc *uniCache) LeaderEncodeData(data []byte, appendIdx uint64) ([]byte, uin
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err == nil {
+			elem.lastIdx = appendIdx
 			atomic.AddUint64(&uc.cachehits, 1)
 			return newData, id
 		}
