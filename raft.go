@@ -846,10 +846,15 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 		if r.uniCache != nil {
 			var fullData []byte
 			enc := es[i]
-			enc.Data, fullData = r.uniCache.SafeEncode(enc.Data, enc.Index, enc.EncodedID)
-			encEnts[i] = enc
-			if fullData != nil {
-				es[i].Data = fullData
+			if enc.EncodedID == 0 {
+				enc.Data, _ = r.uniCache.LeaderEncodeData(enc.Data, enc.Index)
+				encEnts[i] = enc
+			} else {
+				enc.Data, fullData = r.uniCache.SafeEncode(enc.Data, enc.Index, enc.EncodedID)
+				encEnts[i] = enc
+				if fullData != nil {
+					es[i].Data = fullData
+				}
 			}
 		}
 	}

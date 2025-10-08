@@ -19,6 +19,7 @@ const maxCacheSize = 1000
 type UniCache interface {
 	NewUniCache(maxCommit *uint64, minCacheVersion func() uint64, capacity int) UniCache
 	EncodeData(data []byte) ([]byte, uint32)
+	LeaderEncodeData(data []byte, appendIdx uint64) ([]byte, uint32)
 	DecodeEntry(entry pb.Entry) (pb.Entry, bool)
 	SafeEncode(data []byte, appendIdx uint64, encodedID uint32) ([]byte, []byte)
 	GetNextId() uint32
@@ -255,7 +256,47 @@ func (uc *uniCache) EncodeData(data []byte) ([]byte, uint32) {
 	encodedID := protowire.AppendVarint(nil, uint64(id))
 	newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
 	if err == nil {
+		atomic.AddUint64(&uc.cachehits, 1)
 		return newData, id
+	}
+	return data, 0
+}
+
+func (uc *uniCache) LeaderEncodeData(data []byte, appendIdx uint64) ([]byte, uint32) {
+	if len(data) == 0 {
+		return data, 0
+	}
+
+	uc.mu.RLock()
+	defer uc.mu.RUnlock()
+
+	keyBytes, _, err := GetProtoFieldAndWireType(data, cachedFieldNumber)
+
+	if err != nil {
+		return data, 0
+	}
+
+	keyStr := string(keyBytes)
+	id, ok := uc.reverseCache[keyStr]
+
+	if !ok {
+		//fmt.Println("[EncodeData] not in reversecache")
+		return data, 0
+	}
+
+	elem, ok := uc.cache[id]
+	if !ok {
+		//fmt.Println("[EncodeData] not in cache")
+		return data, 0
+	}
+
+	if appendIdx-elem.lastIdx <= uint64(uc.capacity) && uc.minCacheVersion() >= elem.addedIdx {
+		encodedID := protowire.AppendVarint(nil, uint64(id))
+		newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
+		if err == nil {
+			atomic.AddUint64(&uc.cachehits, 1)
+			return newData, id
+		}
 	}
 	return data, 0
 }
