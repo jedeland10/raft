@@ -256,7 +256,6 @@ func (uc *uniCache) EncodeData(data []byte) ([]byte, uint32) {
 	encodedID := protowire.AppendVarint(nil, uint64(id))
 	newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
 	if err == nil {
-		atomic.AddUint64(&uc.cachehits, 1)
 		return newData, id
 	}
 	return data, 0
