@@ -2,6 +2,7 @@ package unicache
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	pb "go.etcd.io/raft/v3/raftpb"
@@ -269,4 +270,36 @@ func TestUniCache_SafeEncode_Guards_WithMyKV(t *testing.T) {
 	if !bytes.Equal(out, d) || full != nil {
 		t.Fatalf("SafeEncode guard failed: out=%x full=%v", out, full)
 	}
+}
+
+func TestUniCache_Print_Proto_MyKV(t *testing.T) {
+	var maxCommit uint64
+	minCache := func() uint64 { return 1 }
+	uc := NewUniCache(&maxCommit, minCache, 200)
+
+	for i := range 1 {
+		uc.UpdateCache(pb.Entry{Index: 1, Data: myKVBytes([]byte(string("any "+fmt.Sprintf("%d", i))), []byte("val"), nil)})
+	}
+
+	// Create the serialized KVBytes
+	d := myKVBytes([]byte("any"), []byte("val"), nil)
+
+	if _, ok := uc.UpdateCache(pb.Entry{Index: 1, Data: d}); !ok {
+		t.Fatal("UpdateCache k1 failed")
+	}
+
+	// Produce an encoded MyKV where key field #1 is a varint id.
+	enc, _ := uc.EncodeData(d)
+
+	// Print the byte array
+	t.Log("Serialized full KVBytes: ", d)
+	t.Log("Serialized full KVBytes string: ", string(d))
+	t.Log("Serialized encoded KVBytes: ", enc)
+	t.Log("Serialized encoded KVBytes: ", string(enc))
+
+	dec, _ := uc.DecodeEntry(pb.Entry{Index: 1, Data: d})
+
+	t.Log("Serialized decoded KVBytes: ", dec.Data)
+	t.Log("Serialized decoded KVBytes: ", string(dec.Data))
+
 }
