@@ -201,7 +201,6 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 
 			fullData, err := ReplaceProtoField(data, cachedFieldNumber, elem.key, protowire.BytesType)
 			if err == nil {
-				elem.lastIdx = appendIdx
 				return data, fullData
 			}
 		}
