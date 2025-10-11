@@ -294,7 +294,6 @@ func (uc *uniCache) LeaderEncodeData(data []byte, appendIdx uint64) ([]byte, uin
 		encodedID := protowire.AppendVarint(nil, uint64(id))
 		newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
 		if err == nil {
-			elem.lastIdx = appendIdx
 			atomic.AddUint64(&uc.cachehits, 1)
 			return newData, id
 		}
