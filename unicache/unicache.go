@@ -153,7 +153,7 @@ func (uc *uniCache) PurgeEvicted(currIdx uint64) {
 	minC := uc.minCacheVersion()
 	var window uint64
 	if minC > uint64(uc.capacity) {
-		window = minC - uint64(uc.capacity)
+		window = minC - uint64(uc.capacity) + currIdx
 	} else {
 		window = 0
 	}
