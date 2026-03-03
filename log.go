@@ -63,6 +63,11 @@ type raftLog struct {
 
 	// UniCache module
 	uniCache unicache.UniCache
+	// cacheWaterMark is the highest log index up to which BatchUpdateCache has
+	// actually been called. It advances only inside commitTo, never via
+	// restore (snapshot), so it accurately reflects the follower's decode
+	// capability even after a snapshot jumps committed forward.
+	cacheWaterMark uint64
 }
 
 // newLog returns log using the given storage and default options. It
@@ -340,6 +345,7 @@ func (l *raftLog) commitTo(tocommit uint64) {
 				if len(entries) > 0 {
 					l.uniCache.PurgeEvicted()
 				}
+				l.cacheWaterMark = tocommit
 			} else {
 				l.logger.Panicf("uniCache failed to load committed entries [%d-%d]: %v", l.committed+1, tocommit, err)
 			}
