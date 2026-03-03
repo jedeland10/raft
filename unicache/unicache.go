@@ -7,7 +7,7 @@ import (
 	"math"
 	"sync/atomic"
 
-	pb "github.com/jedeland10/raft/raftpb"
+	pb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
