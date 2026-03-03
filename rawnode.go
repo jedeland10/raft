@@ -185,8 +185,6 @@ func (rn *RawNode) readyWithoutAccept() Ready {
 			}
 			rd.CommittedEntries = decodedEntries
 		}
-
-		rn.raft.lastCacheIdx = rn.raft.raftLog.uniCache.GetMinCacheIdx(rd.CommittedEntries[len(rd.CommittedEntries)-1].Index)
 	}
 
 	if rn.asyncStorageWrites {
