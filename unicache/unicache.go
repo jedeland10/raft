@@ -7,7 +7,7 @@ import (
 	"math"
 	"sync/atomic"
 
-	pb "go.etcd.io/raft/v3/raftpb"
+	pb "github.com/jedeland10/raft/raftpb"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -135,6 +135,8 @@ func (uc *uniCache) evictLRU(currIdx uint64) {
 
 	//fmt.Printf("[evictLRU] index=%d evicting ID=%d lenCache:%d, lastIdx=%d capacity=%d len evicted=%d\n", currIdx, entry.id, len(uc.cache), entry.lastIdx, uc.capacity, len(uc.evicted))
 
+	//fmt.Printf("[evictLRU] index=%d evicting ID=%d lenCache:%d, lastIdx=%d capacity=%d len evicted=%d\n", currIdx, entry.id, len(uc.cache), entry.lastIdx, uc.capacity, len(uc.evicted))
+
 	minCommit := int(uc.minCacheVersion())
 
 	if minCommit == 0 {
@@ -193,7 +195,7 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 	elem, ok := uc.cache[encodedID]
 
 	if ok {
-		if appendIdx-elem.lastIdx <= uint64(uc.capacity) && uc.minCacheVersion() >= elem.addedIdx {
+		if appendIdx-elem.lastIdx <= uint64(uc.capacity) && elem.lastIdx <= uc.minCacheVersion() && uc.minCacheVersion() >= elem.addedIdx {
 			atomic.AddUint64(&uc.cachehits, 1)
 			//fmt.Printf("[SafeEncode] index=%d cachehits=%d appendIdx=%d lastIdx=%d minCachedIdx=%d\n", appendIdx, uc.cachehits, appendIdx, elem.lastIdx, uc.minCacheVersion())
 
@@ -245,7 +247,7 @@ func (uc *uniCache) BatchSafeEncode(entries []pb.Entry) (fullData [][]byte, logD
 		if e, ok := uc.cache[id]; ok {
 			entry = e
 			// Logic: Is it safe to send the tiny ID to followers?
-			if entries[i].Index-e.lastIdx <= capLimit && minVer >= e.addedIdx {
+			if entries[i].Index-e.lastIdx <= capLimit && e.lastIdx <= minVer && minVer >= e.addedIdx {
 				isSafeHit[i] = true
 				e.lastIdx = entries[i].Index
 				hits++

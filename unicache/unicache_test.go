@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	pb "go.etcd.io/raft/v3/raftpb"
+	pb "github.com/jedeland10/raft/raftpb"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 

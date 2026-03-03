@@ -11,8 +11,8 @@ import (
 
 	"google.golang.org/protobuf/encoding/protowire"
 
-	pb "go.etcd.io/raft/v3/raftpb"
-	ucpkg "go.etcd.io/raft/v3/unicache"
+	pb "github.com/jedeland10/raft/raftpb"
+	ucpkg "github.com/jedeland10/raft/unicache"
 )
 
 type benchCase struct {
