@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"go.etcd.io/raft/v3/confchange"
 	"go.etcd.io/raft/v3/quorum"
@@ -861,20 +862,46 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 		}
 		if anyEncoded {
 			encEnts := make([]pb.Entry, len(es))
-			for i := range es {
-				var fullData []byte
-				enc := es[i]
-				enc.Data, fullData = r.raftLog.uniCache.SafeEncode(enc.Data, enc.Index, enc.EncodedID)
-				if enc.EncodedID != 0 && enc.Data == nil {
-					r.logger.Warningf(
-						"%x proposal contains encoded ID %d that cannot be resolved; dropping proposal",
-						r.id, enc.EncodedID,
-					)
-					return false
+			fullDatas := make([][]byte, len(es))
+			encodeFailed := int32(-1) // -1 = no failure
+
+			if len(es) > 4 {
+				var wg sync.WaitGroup
+				for i := range es {
+					wg.Add(1)
+					go func(i int) {
+						defer wg.Done()
+						enc := es[i]
+						enc.Data, fullDatas[i] = r.raftLog.uniCache.SafeEncode(enc.Data, enc.Index, enc.EncodedID)
+						encEnts[i] = enc
+						if enc.EncodedID != 0 && enc.Data == nil {
+							atomic.CompareAndSwapInt32(&encodeFailed, -1, int32(i))
+						}
+					}(i)
 				}
-				encEnts[i] = enc
-				if fullData != nil {
-					es[i].Data = fullData
+				wg.Wait()
+			} else {
+				for i := range es {
+					enc := es[i]
+					enc.Data, fullDatas[i] = r.raftLog.uniCache.SafeEncode(enc.Data, enc.Index, enc.EncodedID)
+					encEnts[i] = enc
+					if enc.EncodedID != 0 && enc.Data == nil {
+						encodeFailed = int32(i)
+						break
+					}
+				}
+			}
+
+			if idx := atomic.LoadInt32(&encodeFailed); idx >= 0 {
+				r.logger.Warningf(
+					"%x proposal contains encoded ID %d that cannot be resolved; dropping proposal",
+					r.id, es[idx].EncodedID,
+				)
+				return false
+			}
+			for i := range es {
+				if fullDatas[i] != nil {
+					es[i].Data = fullDatas[i]
 				}
 			}
 			r.pend.TruncateAndAppend(encEnts)
@@ -1889,14 +1916,46 @@ func logSliceFromMsgApp(m *pb.Message) logSlice {
 
 func (r *raft) handleAppendEntries(m pb.Message) {
 	if r.raftLog.uniCache != nil {
+		// Count entries that need decoding to decide serial vs parallel.
+		needsDecode := 0
 		for i := range m.Entries {
 			if m.Entries[i].Type == pb.EntryNormal && unicache.IsEncodedData(m.Entries[i].Data) {
-				if decoded, ok := r.raftLog.uniCache.DecodeEntry(m.Entries[i]); ok {
-					m.Entries[i] = decoded
-					m.Entries[i].EncodedID = 0 // Clear leader's ID; follower cache IDs may differ
-				} else {
-					panic(fmt.Sprintf("cache decode failed for index %d committed %d with data: %d",
-						m.Entries[i].Index, r.raftLog.committed, m.Entries[i].Data))
+				needsDecode++
+			}
+		}
+
+		if needsDecode > 4 {
+			var wg sync.WaitGroup
+			decodeFailed := int32(-1)
+			for i := range m.Entries {
+				if m.Entries[i].Type == pb.EntryNormal && unicache.IsEncodedData(m.Entries[i].Data) {
+					wg.Add(1)
+					go func(i int) {
+						defer wg.Done()
+						if decoded, ok := r.raftLog.uniCache.DecodeEntry(m.Entries[i]); ok {
+							m.Entries[i] = decoded
+							m.Entries[i].EncodedID = 0
+						} else {
+							atomic.CompareAndSwapInt32(&decodeFailed, -1, int32(i))
+						}
+					}(i)
+				}
+			}
+			wg.Wait()
+			if idx := atomic.LoadInt32(&decodeFailed); idx >= 0 {
+				panic(fmt.Sprintf("cache decode failed for index %d committed %d with data: %d",
+					m.Entries[idx].Index, r.raftLog.committed, m.Entries[idx].Data))
+			}
+		} else {
+			for i := range m.Entries {
+				if m.Entries[i].Type == pb.EntryNormal && unicache.IsEncodedData(m.Entries[i].Data) {
+					if decoded, ok := r.raftLog.uniCache.DecodeEntry(m.Entries[i]); ok {
+						m.Entries[i] = decoded
+						m.Entries[i].EncodedID = 0
+					} else {
+						panic(fmt.Sprintf("cache decode failed for index %d committed %d with data: %d",
+							m.Entries[i].Index, r.raftLog.committed, m.Entries[i].Data))
+					}
 				}
 			}
 		}

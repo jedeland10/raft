@@ -371,9 +371,20 @@ func (n *node) run() {
 		if lead != r.lead {
 			if r.hasLeader() {
 				if lead == None {
-					r.logger.Infof("raft.node: %x elected leader %x at term %d", r.id, r.lead, r.Term)
+					r.logger.Infof(
+						"raft.node: %x elected leader %x at term %d",
+						r.id,
+						r.lead,
+						r.Term,
+					)
 				} else {
-					r.logger.Infof("raft.node: %x changed leader from %x to %x at term %d", r.id, lead, r.lead, r.Term)
+					r.logger.Infof(
+						"raft.node: %x changed leader from %x to %x at term %d",
+						r.id,
+						lead,
+						r.lead,
+						r.Term,
+					)
 				}
 				propc = n.propc
 			} else {
@@ -468,7 +479,11 @@ func (n *node) Tick() {
 	}
 }
 
-func (n *node) Campaign(ctx context.Context) error { return n.step(ctx, pb.Message{Type: pb.MsgHup}) }
+func (n *node) Campaign(
+	ctx context.Context,
+) error {
+	return n.step(ctx, pb.Message{Type: pb.MsgHup})
+}
 
 func (n *node) CacheHits() uint64 {
 	if n.rn.raft.raftLog.uniCache == nil {
