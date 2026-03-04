@@ -1921,6 +1921,9 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 		for i := range m.Entries {
 			if m.Entries[i].Type == pb.EntryNormal && unicache.IsEncodedData(m.Entries[i].Data) {
 				needsDecode++
+				if needsDecode > 4 {
+					break
+				}
 			}
 		}
 
