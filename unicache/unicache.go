@@ -205,32 +205,47 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 
 	elem, ok := uc.cache[encodedID]
 
+	// Resolve the key bytes from cache or evicted map.
+	var key []byte
+	var safeHit bool
 	if ok {
+		key = elem.key
 		if appendIdx-elem.lastIdx <= uint64(uc.capacity) && uc.minCacheVersion() >= elem.addedIdx {
 			atomic.AddUint64(&uc.cachehits, 1)
-			//fmt.Printf("[SafeEncode] index=%d cachehits=%d appendIdx=%d lastIdx=%d minCachedIdx=%d\n", appendIdx, uc.cachehits, appendIdx, elem.lastIdx, uc.minCacheVersion())
+			safeHit = true
+		}
+	} else if evElem, evOk := uc.evicted[encodedID]; evOk {
+		key = evElem.Value.(*cacheEntry).key
+	}
 
-			fullData, err := ReplaceProtoField(data, cachedFieldNumber, elem.key, protowire.BytesType)
-			if err == nil {
-				return data, fullData
+	if key != nil {
+		// Inline construction: build fullData directly instead of ReplaceProtoField.
+		// Input data is: [0x08][varint(id)][rest...]
+		// Output fullData: [0x0A][len-prefix(key)][key][rest...]
+		if data[0] == cachedFieldVarintTag {
+			_, n := protowire.ConsumeVarint(data[1:])
+			if n > 0 {
+				rest := data[1+n:]
+				lenPrefix := protowire.SizeVarint(uint64(len(key)))
+				fullData := make([]byte, 0, 1+lenPrefix+len(key)+len(rest))
+				fullData = append(fullData, cachedFieldBytesTag)
+				fullData = protowire.AppendVarint(fullData, uint64(len(key)))
+				fullData = append(fullData, key...)
+				fullData = append(fullData, rest...)
+				if safeHit {
+					return data, fullData
+				}
+				return fullData, fullData
 			}
 		}
-		//fmt.Printf("[SafeEncode] index=%d eviction risk, restoring full for ID=%d\n", appendIdx, encodedID)
-		newData, err := ReplaceProtoField(data, cachedFieldNumber, elem.key, protowire.BytesType)
+		// Fallback for unexpected wire format
+		newData, err := ReplaceProtoField(data, cachedFieldNumber, key, protowire.BytesType)
 		if err == nil {
-			//fmt.Printf("[SafeEncode] index=%d successfully restored ID=%d\n", appendIdx, encodedID)
+			if safeHit {
+				return data, newData
+			}
 			return newData, newData
 		}
-	}
-	// check evicted cache
-	if evElem, ok := uc.evicted[encodedID]; ok {
-		ev := evElem.Value.(*cacheEntry)
-		newData, err := ReplaceProtoField(data, cachedFieldNumber, ev.key, protowire.BytesType)
-		if err == nil {
-			//fmt.Printf("[SafeEncode] index=%d restored from evicted ID=%d keyHash=%x\n", appendIdx, encodedID, sha256.Sum256(ev.key))
-			return newData, newData
-		}
-		//fmt.Println("[SafeEncode] evicted restore failed:", err)
 	}
 	fmt.Printf("[SafeEncode] index=%d didnt find data for ID=%d, capacity=%d, cache size=%d, evicted size=%d, nextId=%d\n",
 		appendIdx, encodedID, uc.capacity, len(uc.cache), len(uc.evicted), uc.nextID)
@@ -278,19 +293,47 @@ func (uc *uniCache) BatchSafeEncode(entries []pb.Entry) (fullData [][]byte, logD
 		atomic.AddUint64(&uc.cachehits, hits)
 	}
 
-	// 2. Transform OUTSIDE the lock
+	// 2. Arena allocation: compute total size, allocate once, then slice.
+	// Each fullData[i] replaces the varint ID field with the original key bytes.
+	// Layout per entry: tag(0x0A) + len-prefix(key) + key + rest-of-proto
+	totalSize := 0
+	restOffsets := make([]int, len(entries)) // fieldEnd for each entry
 	for i := range keys {
 		if keys[i] == nil {
 			continue
 		}
+		data := entries[i].Data
+		if len(data) == 0 || data[0] != cachedFieldVarintTag {
+			keys[i] = nil // mark as skip — unexpected format
+			continue
+		}
+		_, n := protowire.ConsumeVarint(data[1:])
+		if n < 0 {
+			keys[i] = nil
+			continue
+		}
+		restOffsets[i] = 1 + n
+		restLen := len(data) - restOffsets[i]
+		totalSize += 1 + protowire.SizeVarint(uint64(len(keys[i]))) + len(keys[i]) + restLen
+	}
 
-		newData, err := ReplaceProtoField(entries[i].Data, cachedFieldNumber, keys[i], protowire.BytesType)
-		if err == nil {
-			fullData[i] = newData
-			// If it WASN'T a safe hit, the log needs the full data too
-			if !isSafeHit[i] {
-				logData[i] = newData
-			}
+	if totalSize == 0 {
+		return fullData, logData
+	}
+
+	arena := make([]byte, 0, totalSize)
+	for i := range keys {
+		if keys[i] == nil {
+			continue
+		}
+		start := len(arena)
+		arena = append(arena, cachedFieldBytesTag)
+		arena = protowire.AppendVarint(arena, uint64(len(keys[i])))
+		arena = append(arena, keys[i]...)
+		arena = append(arena, entries[i].Data[restOffsets[i]:]...)
+		fullData[i] = arena[start:len(arena):len(arena)]
+		if !isSafeHit[i] {
+			logData[i] = fullData[i]
 		}
 	}
 
@@ -328,7 +371,24 @@ func (uc *uniCache) EncodeData(data []byte, currCacheIdx uint64) ([]byte, uint32
 		}
 	}
 
-	// Encoding outside the lock
+	// Inline construction: build encoded data directly, avoiding
+	// ReplaceProtoField overhead (1 alloc instead of 2).
+	if data[0] == cachedFieldBytesTag {
+		_, n := protowire.ConsumeBytes(data[1:])
+		if n > 0 {
+			rest := data[1+n:]
+			// Build varint header on stack
+			var hdr [6]byte // 1 tag + max 5 varint bytes for uint32
+			hdr[0] = cachedFieldVarintTag
+			newHdr := protowire.AppendVarint(hdr[:1], uint64(id))
+			out := make([]byte, 0, len(newHdr)+len(rest))
+			out = append(out, newHdr...)
+			out = append(out, rest...)
+			atomic.StoreUint64(&uc.lastInFlight, currCacheIdx)
+			return out, id
+		}
+	}
+	// Fallback for unexpected wire format
 	encodedID := protowire.AppendVarint(nil, uint64(id))
 	newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
 	if err == nil {
@@ -378,6 +438,24 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) (pb.Entry, bool) {
 			return entry, false
 		}
 
+		// Inline construction: data is [0x08][varint(id)][rest...]
+		// Build: [0x0A][len-prefix(key)][key][rest...]
+		data := entry.Data
+		if data[0] == cachedFieldVarintTag {
+			_, vn := protowire.ConsumeVarint(data[1:])
+			if vn > 0 {
+				rest := data[1+vn:]
+				lenPrefix := protowire.SizeVarint(uint64(len(key)))
+				newData := make([]byte, 0, 1+lenPrefix+len(key)+len(rest))
+				newData = append(newData, cachedFieldBytesTag)
+				newData = protowire.AppendVarint(newData, uint64(len(key)))
+				newData = append(newData, key...)
+				newData = append(newData, rest...)
+				entry.Data = newData
+				return entry, true
+			}
+		}
+		// Fallback
 		newData, err := ReplaceProtoField(entry.Data, cachedFieldNumber, key, protowire.BytesType)
 		if err != nil {
 			return entry, false
