@@ -884,33 +884,44 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 			}
 		}
 		if anyEncoded {
-			// BatchSafeEncode uses arena allocation (1 alloc for all entries)
-			// instead of per-entry SafeEncode (N allocs).
-			fullDatas, logDatas := r.raftLog.uniCache.BatchSafeEncode(es)
-
-			// Check for unresolvable encoded IDs.
-			for i := range es {
-				if es[i].EncodedID != 0 && fullDatas[i] == nil {
-					r.logger.Warningf(
-						"%x proposal contains encoded ID %d that cannot be resolved; dropping proposal",
-						r.id,
-						es[i].EncodedID,
-					)
-					return false
-				}
-			}
-
-			// Build pending-buf entries: safe-hit keeps compact encoded data,
-			// non-safe-hit gets full data (logDatas[i] != nil).
 			encEnts := make([]pb.Entry, len(es))
-			for i := range es {
-				encEnts[i] = es[i]
-				if logDatas[i] != nil {
-					encEnts[i].Data = logDatas[i]
+			fullDatas := make([][]byte, len(es))
+			encodeFailed := int32(-1) // -1 = no failure
+
+			if len(es) > 4 {
+				var wg sync.WaitGroup
+				for i := range es {
+					wg.Add(1)
+					go func(i int) {
+						defer wg.Done()
+						enc := es[i]
+						enc.Data, fullDatas[i] = r.raftLog.uniCache.SafeEncode(enc.Data, enc.Index, enc.EncodedID)
+						encEnts[i] = enc
+						if enc.EncodedID != 0 && enc.Data == nil {
+							atomic.CompareAndSwapInt32(&encodeFailed, -1, int32(i))
+						}
+					}(i)
+				}
+				wg.Wait()
+			} else {
+				for i := range es {
+					enc := es[i]
+					enc.Data, fullDatas[i] = r.raftLog.uniCache.SafeEncode(enc.Data, enc.Index, enc.EncodedID)
+					encEnts[i] = enc
+					if enc.EncodedID != 0 && enc.Data == nil {
+						encodeFailed = int32(i)
+						break
+					}
 				}
 			}
 
-			// Leader log always stores the full (expanded) data.
+			if idx := atomic.LoadInt32(&encodeFailed); idx >= 0 {
+				r.logger.Warningf(
+					"%x proposal contains encoded ID %d that cannot be resolved; dropping proposal",
+					r.id, es[idx].EncodedID,
+				)
+				return false
+			}
 			for i := range es {
 				if fullDatas[i] != nil {
 					es[i].Data = fullDatas[i]
