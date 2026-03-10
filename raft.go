@@ -437,8 +437,6 @@ type raft struct {
 
 	traceLogger TraceLogger
 
-	// Leader only pending entries encoded using UniCache module
-	pend pendingBuf
 }
 
 func newRaft(c *Config) *raft {
@@ -662,13 +660,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	// leader to send an append), allowing it to be acked or rejected, both of
 	// which will clear out Inflights.
 	if pr.State != tracker.StateReplicate || !pr.Inflights.Full() {
-		ents, err = r.pend.Slice(pr.Next, r.raftLog.lastIndex()+1, r.maxMsgSize)
-		if errors.Is(err, ErrUnavailable) || errors.Is(err, ErrCompacted) {
-			// pend does not cover this range: either the entries were never encoded
-			// (ErrCompacted: pend.base is ahead of pr.Next) or pend is empty
-			// (ErrUnavailable). Fall back to the raw log entries.
-			ents, err = r.raftLog.entries(pr.Next, r.maxMsgSize)
-		}
+		ents, err = r.raftLog.entries(pr.Next, r.maxMsgSize)
 	}
 	if len(ents) == 0 && !sendIfEmpty {
 		return false
@@ -883,33 +875,21 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 			}
 		}
 		if anyEncoded {
-			encEnts := make([]pb.Entry, len(es))
 			for i := range es {
-				var fullData []byte
-				enc := es[i]
-				enc.Data, fullData = r.raftLog.uniCache.SafeEncode(
-					enc.Data,
-					enc.Index,
-					enc.EncodedID,
+				es[i].Data, _ = r.raftLog.uniCache.SafeEncode(
+					es[i].Data,
+					es[i].Index,
+					es[i].EncodedID,
 				)
-				if enc.EncodedID != 0 && enc.Data == nil {
+				if es[i].EncodedID != 0 && es[i].Data == nil {
 					r.logger.Warningf(
 						"%x proposal contains encoded ID %d that cannot be resolved; dropping proposal",
 						r.id,
-						enc.EncodedID,
+						es[i].EncodedID,
 					)
 					return false
 				}
-				encEnts[i] = enc
-				if fullData != nil {
-					es[i].Data = fullData
-				}
 			}
-			r.pend.TruncateAndAppend(encEnts)
-		} else {
-			// Keep pendingBuf aligned with unstable even when no entries are
-			// encoded, so TruncateAndAppend never sees a gap on the next call.
-			r.pend.TruncateAndAppend(es)
 		}
 	}
 

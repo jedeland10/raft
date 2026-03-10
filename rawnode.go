@@ -165,30 +165,11 @@ func (rn *RawNode) readyWithoutAccept() Ready {
 	rd.MustSync = MustSync(r.hardState(), rn.prevHardSt, len(rd.Entries))
 
 	// We no longer UPDATE the cache here (done in commitTo),
-	// but we must still DECODE entries for the user application.
-	if rn.raft.raftLog.uniCache != nil && len(rd.CommittedEntries) > 0 {
-		// Only allocate the decoded slice when at least one entry is actually encoded.
-		// At zero hit rate all entries carry raw BytesType data, so DecodeEntry is a
-		// no-op and the allocation would be wasted.
-		hasEncoded := false
-		for _, ent := range rd.CommittedEntries {
-			if unicache.IsEncodedData(ent.Data) {
-				hasEncoded = true
-				break
-			}
-		}
-		if hasEncoded {
-			decodedEntries := make([]pb.Entry, len(rd.CommittedEntries))
-			for i, ent := range rd.CommittedEntries {
-				dec, ok := rn.raft.raftLog.uniCache.DecodeEntry(ent)
-				if !ok {
-					rn.raft.logger.Warningf("failed to decode committed entry at index %d", ent.Index)
-				}
-				decodedEntries[i] = dec
-			}
-			rd.CommittedEntries = decodedEntries
-		}
-
+	// but we must still DECODE entries for the user application and storage.
+	// The leader's log now stores encoded data; decode before handing off.
+	if rn.raft.raftLog.uniCache != nil {
+		rd.Entries = rn.decodeEntries(rd.Entries)
+		rd.CommittedEntries = rn.decodeEntries(rd.CommittedEntries)
 	}
 
 	if rn.asyncStorageWrites {
@@ -215,6 +196,33 @@ func (rn *RawNode) readyWithoutAccept() Ready {
 	}
 
 	return rd
+}
+
+// decodeEntries decodes any encoded (varint-tagged) entries in the slice,
+// returning the original slice unmodified if no entries are encoded.
+func (rn *RawNode) decodeEntries(ents []pb.Entry) []pb.Entry {
+	if len(ents) == 0 {
+		return ents
+	}
+	hasEncoded := false
+	for _, ent := range ents {
+		if unicache.IsEncodedData(ent.Data) {
+			hasEncoded = true
+			break
+		}
+	}
+	if !hasEncoded {
+		return ents
+	}
+	decoded := make([]pb.Entry, len(ents))
+	for i, ent := range ents {
+		dec, ok := rn.raft.raftLog.uniCache.DecodeEntry(ent)
+		if !ok {
+			rn.raft.logger.Warningf("failed to decode entry at index %d", ent.Index)
+		}
+		decoded[i] = dec
+	}
+	return decoded
 }
 
 // MustSync returns true if the hard state and count of Raft entries indicate
@@ -463,9 +471,6 @@ func (rn *RawNode) acceptReady(rd Ready) {
 	rn.raft.msgs = nil
 	rn.raft.msgsAfterAppend = nil
 	rn.raft.raftLog.acceptUnstable()
-	if rn.raft.raftLog.uniCache != nil {
-		rn.raft.pend.Truncate(rn.raft.raftLog.unstable.offset)
-	}
 	if len(rd.CommittedEntries) > 0 {
 		ents := rd.CommittedEntries
 		index := ents[len(ents)-1].Index
