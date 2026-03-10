@@ -2060,19 +2060,8 @@ func logSliceFromMsgApp(m *pb.Message) logSlice {
 }
 
 func (r *raft) handleAppendEntries(m pb.Message) {
-	if r.raftLog.uniCache != nil {
-		for i := range m.Entries {
-			if m.Entries[i].Type == pb.EntryNormal && unicache.IsEncodedData(m.Entries[i].Data) {
-				if decoded, ok := r.raftLog.uniCache.DecodeEntry(m.Entries[i]); ok {
-					m.Entries[i] = decoded
-					m.Entries[i].EncodedID = 0 // Clear leader's ID; follower cache IDs may differ
-				} else {
-					panic(fmt.Sprintf("cache decode failed for index %d committed %d with data: %d",
-						m.Entries[i].Index, r.raftLog.committed, m.Entries[i].Data))
-				}
-			}
-		}
-	}
+	// Encoded entries are stored as-is in the follower's log.
+	// Decoding is deferred to Ready(), keeping the receive path allocation-free.
 
 	// TODO(pav-kv): construct logSlice up the stack next to receiving the
 	// message, and validate it before taking any action (e.g. bumping term).
