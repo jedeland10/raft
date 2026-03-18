@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -4100,7 +4102,7 @@ func SetRandomizedElectionTimeout(r *RawNode, v int) {
 }
 
 func newTestConfig(id uint64, election, heartbeat int, storage Storage) *Config {
-	return &Config{
+	cfg := &Config{
 		ID:              id,
 		ElectionTick:    election,
 		HeartbeatTick:   heartbeat,
@@ -4108,6 +4110,12 @@ func newTestConfig(id uint64, election, heartbeat int, storage Storage) *Config 
 		MaxSizePerMsg:   noLimit,
 		MaxInflightMsgs: 256,
 	}
+	if s := os.Getenv("RAFT_UNICACHE_SIZE"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			cfg.UniCacheSize = n
+		}
+	}
+	return cfg
 }
 
 type testMemoryStorageOptions func(*MemoryStorage)
@@ -4150,4 +4158,37 @@ func newTestRawNode(id uint64, election, heartbeat int, storage Storage) *RawNod
 		panic(err)
 	}
 	return rn
+}
+
+// TestAppendEntryRejectsUnknownEncodedID verifies that a leader with UniCache
+// enabled rejects a proposal batch containing an EncodedID that cannot be
+// resolved by SafeEncode (returns nil data). This prevents corrupted varint
+// data from entering the log after a leadership transition.
+func TestAppendEntryRejectsUnknownEncodedID(t *testing.T) {
+	s := newTestMemoryStorage(withPeers(1, 2))
+	cfg := newTestConfig(1, 5, 1, s)
+	cfg.UniCacheSize = 10 // Enable UniCache
+	r := newRaft(cfg)
+	r.becomeCandidate()
+	r.becomeLeader()
+
+	// Drain the initial empty entry appended by becomeLeader.
+	r.readMessages()
+
+	// Create an entry with an EncodedID that does not exist in the cache.
+	// SafeEncode will return (nil, nil) for this unknown ID.
+	entry := pb.Entry{
+		Data:      []byte("some-data"),
+		EncodedID: 999, // not in cache
+	}
+	accepted := r.appendEntry(entry)
+	if accepted {
+		t.Fatal("expected appendEntry to reject proposal with unknown encoded ID")
+	}
+
+	// A normal entry (EncodedID=0) should still be accepted.
+	normalEntry := pb.Entry{Data: []byte("normal-data")}
+	if !r.appendEntry(normalEntry) {
+		t.Fatal("expected appendEntry to accept normal entry without encoded ID")
+	}
 }

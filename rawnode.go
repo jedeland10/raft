@@ -16,9 +16,11 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 
 	pb "go.etcd.io/raft/v3/raftpb"
 	"go.etcd.io/raft/v3/tracker"
+	"go.etcd.io/raft/v3/unicache"
 )
 
 // ErrStepLocalMsg is returned when try to step a local raft message
@@ -162,6 +164,33 @@ func (rn *RawNode) readyWithoutAccept() Ready {
 	}
 	rd.MustSync = MustSync(r.hardState(), rn.prevHardSt, len(rd.Entries))
 
+	// We no longer UPDATE the cache here (done in commitTo),
+	// but we must still DECODE entries for the user application.
+	if rn.raft.raftLog.uniCache != nil && len(rd.CommittedEntries) > 0 {
+		// Only allocate the decoded slice when at least one entry is actually encoded.
+		// At zero hit rate all entries carry raw BytesType data, so DecodeEntry is a
+		// no-op and the allocation would be wasted.
+		hasEncoded := false
+		for _, ent := range rd.CommittedEntries {
+			if unicache.IsEncodedData(ent.Data) {
+				hasEncoded = true
+				break
+			}
+		}
+		if hasEncoded {
+			decodedEntries := make([]pb.Entry, len(rd.CommittedEntries))
+			for i, ent := range rd.CommittedEntries {
+				dec, ok := rn.raft.raftLog.uniCache.DecodeEntry(ent)
+				if !ok {
+					rn.raft.logger.Warningf("failed to decode committed entry at index %d", ent.Index)
+				}
+				decodedEntries[i] = dec
+			}
+			rd.CommittedEntries = decodedEntries
+		}
+
+	}
+
 	if rn.asyncStorageWrites {
 		// If async storage writes are enabled, enqueue messages to
 		// local storage threads, where applicable.
@@ -229,6 +258,7 @@ func newStorageAppendMsg(r *raft, rd Ready) pb.Message {
 		From:    r.id,
 		Entries: rd.Entries,
 	}
+	fmt.Println("entries from newstorageappendmsg: ", rd.Entries)
 	if !IsEmptyHardState(rd.HardState) {
 		// If the Ready includes a HardState update, assign each of its fields
 		// to the corresponding fields in the Message. This allows clients to
@@ -433,6 +463,9 @@ func (rn *RawNode) acceptReady(rd Ready) {
 	rn.raft.msgs = nil
 	rn.raft.msgsAfterAppend = nil
 	rn.raft.raftLog.acceptUnstable()
+	if rn.raft.raftLog.uniCache != nil {
+		rn.raft.pend.Truncate(rn.raft.raftLog.unstable.offset)
+	}
 	if len(rd.CommittedEntries) > 0 {
 		ents := rd.CommittedEntries
 		index := ents[len(ents)-1].Index
