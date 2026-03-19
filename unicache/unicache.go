@@ -161,21 +161,6 @@ func (uc *uniCache) evictLRU(currIdx uint64) {
 // When all followers have committed at least capacity steps past lastIdx,
 // no follower can encode with that evicted ID anymore, so it is safe to drop.
 func (uc *uniCache) PurgeEvicted() {
-	minC := uc.minCacheVersion()
-	var T uint64
-	if minC > uint64(uc.capacity) {
-		T = minC - uint64(uc.capacity)
-	}
-	for uc.evictOrder.Len() > 0 {
-		front := uc.evictOrder.Front()
-		e := front.Value.(*cacheEntry)
-		if e.lastIdx >= T {
-			break
-		}
-		uc.evictOrder.Remove(front)
-		delete(uc.evicted, e.id)
-	}
-	// Belt-and-suspenders cap enforcement.
 	for len(uc.evicted) > uc.evictedCapacity {
 		front := uc.evictOrder.Front()
 		if front == nil {
