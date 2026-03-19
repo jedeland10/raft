@@ -21,7 +21,7 @@ const (
 
 // UniCache defines methods for encoding/decoding entries with key caching.
 type UniCache interface {
-	NewUniCache(minCacheVersion func() uint64, capacity int) UniCache
+	NewUniCache(minCacheVersion func() uint64, capacity int, evictedCapacity int) UniCache
 	EncodeData(data []byte, currCacheIdx uint64) ([]byte, uint32)
 	DecodeEntry(entry pb.Entry) (pb.Entry, bool)
 	SafeEncode(data []byte, appendIdx uint64, encodedID uint32) ([]byte, []byte)
@@ -62,7 +62,7 @@ type uniCache struct {
 }
 
 // NewUniCache constructs a UniCache with simple LRU caching.
-func NewUniCache(minCacheVersion func() uint64, capacity int) UniCache {
+func NewUniCache(minCacheVersion func() uint64, capacity int, evictedCapacity int) UniCache {
 	return &uniCache{
 		cache:        make(map[uint32]*cacheEntry),
 		reverseCache: make(map[string]uint32),
@@ -75,7 +75,7 @@ func NewUniCache(minCacheVersion func() uint64, capacity int) UniCache {
 
 		evicted:         make(map[uint32]*list.Element),
 		evictOrder:      list.New(),
-		evictedCapacity: 2 * capacity,
+		evictedCapacity: evictedCapacity,
 
 		minCacheVersion: minCacheVersion,
 
@@ -94,8 +94,8 @@ func (uc *uniCache) ResetCacheHits() uint64 {
 }
 
 // NewUniCache implements the UniCache interface.
-func (uc *uniCache) NewUniCache(minCacheVersion func() uint64, capacity int) UniCache {
-	return NewUniCache(minCacheVersion, capacity)
+func (uc *uniCache) NewUniCache(minCacheVersion func() uint64, capacity int, evictedCapacity int) UniCache {
+	return NewUniCache(minCacheVersion, capacity, evictedCapacity)
 }
 
 func (uc *uniCache) GetMinCacheIdx(currMinIdx uint64) uint64 {

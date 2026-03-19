@@ -45,7 +45,7 @@ func TestLRUEviction(t *testing.T) {
 	// buffer rather than being deleted directly.
 	const startIdx = uint64(10 * capacity) // large enough that the evictLRU guard fires
 	minC := func() uint64 { return startIdx + uint64(capacity) }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := NewUniCache(minC, capacity, 2*capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast UniCache to *uniCache")
 	}
@@ -88,7 +88,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	const startIdx = uint64(1)
 	committed := uint64(startIdx + 10)
 	minC := func() uint64 { return committed }
-	uc := NewUniCache(minC, capacity)
+	uc := NewUniCache(minC, capacity, 2*capacity)
 
 	// Commit 10 unique keys.
 	keys := make([][]byte, 10)
@@ -140,7 +140,7 @@ func TestPurgeEvicted(t *testing.T) {
 	const startIdx = uint64(1000)
 	var minVersion uint64
 	minC := func() uint64 { return minVersion }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := NewUniCache(minC, capacity, 2*capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast UniCache to *uniCache")
 	}
@@ -207,7 +207,7 @@ func TestSafeEncodeRestoresFromEvicted(t *testing.T) {
 	// Non-zero minVersion so evictions go to the evicted buffer.
 	minVersion := startIdx + uint64(2*capacity)
 	minC := func() uint64 { return minVersion }
-	uc := NewUniCache(minC, capacity)
+	uc := NewUniCache(minC, capacity, 2*capacity)
 	inner, ok := uc.(*uniCache)
 	if !ok {
 		t.Fatal("type assertion failed")
@@ -269,7 +269,7 @@ func TestLRUConcurrency(t *testing.T) {
 	const startIdx = uint64(1)
 	committed := uint64(startIdx + numKeys)
 	minC := func() uint64 { return committed }
-	uc := NewUniCache(minC, capacity)
+	uc := NewUniCache(minC, capacity, 2*capacity)
 
 	// Populate the cache sequentially before starting concurrent readers.
 	hotKeys := make([][]byte, numKeys)
@@ -311,7 +311,7 @@ func TestLRUHeavyConcurrency(t *testing.T) {
 	const startIdx = uint64(1)
 	committed := uint64(startIdx + numHot)
 	minC := func() uint64 { return committed }
-	uc := NewUniCache(minC, capacity)
+	uc := NewUniCache(minC, capacity, 2*capacity)
 
 	// Pre-populate with hot keys.
 	hotKeys := make([][]byte, numHot)
@@ -357,8 +357,8 @@ func TestLeaderTransitionCacheConsistency(t *testing.T) {
 	committed := uint64(startIdx + 10)
 	minC := func() uint64 { return committed }
 
-	node1Cache := NewUniCache(minC, capacity) // initial leader
-	node2Cache := NewUniCache(minC, capacity) // initial follower → new leader
+	node1Cache := NewUniCache(minC, capacity, 2*capacity) // initial leader
+	node2Cache := NewUniCache(minC, capacity, 2*capacity) // initial follower → new leader
 
 	keys := make([][]byte, 10)
 	for i := range keys {
@@ -408,10 +408,10 @@ func TestNewLeaderWithFreshCache(t *testing.T) {
 	minC := func() uint64 { return committed }
 
 	// New leader has an empty cache (cold start / recovery).
-	newLeaderCache := NewUniCache(minC, capacity)
+	newLeaderCache := NewUniCache(minC, capacity, 2*capacity)
 
 	// Follower has a populated cache.
-	followerCache := NewUniCache(minC, capacity)
+	followerCache := NewUniCache(minC, capacity, 2*capacity)
 	key := []byte("well-known-key")
 	commitKeys(followerCache, [][]byte{key}, 1)
 
@@ -449,7 +449,7 @@ func TestEvictLRUAlwaysMovesToEvicted(t *testing.T) {
 	const startIdx = uint64(10 * capacity) // high enough so evictLRU guard fires
 	// minCacheVersion returns 0, simulating a follower.
 	minC := func() uint64 { return 0 }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := NewUniCache(minC, capacity, 2*capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast UniCache to *uniCache")
 	}
@@ -481,7 +481,7 @@ func TestEvictedCapEnforced(t *testing.T) {
 	const capacity = 10
 	const startIdx = uint64(10 * capacity)
 	minC := func() uint64 { return 0 }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := NewUniCache(minC, capacity, 2*capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast UniCache to *uniCache")
 	}
@@ -513,7 +513,7 @@ func TestEvictedCapEnforced(t *testing.T) {
 func TestSafeEncodeReturnsNilOnMiss(t *testing.T) {
 	const capacity = 10
 	minC := func() uint64 { return 100 }
-	uc := NewUniCache(minC, capacity)
+	uc := NewUniCache(minC, capacity, 2*capacity)
 
 	// Construct a varint-encoded entry with a non-existent ID.
 	fakeEncoded := protowire.AppendTag(nil, cachedFieldNumber, protowire.VarintType)
@@ -681,9 +681,9 @@ func TestLeaderTransitionMixedEncoding(t *testing.T) {
 	minC := func() uint64 { return committed }
 
 	// All three nodes learn the same 5 committed entries.
-	oldLeader := NewUniCache(minC, capacity)
-	newLeader := NewUniCache(minC, capacity)
-	follower := NewUniCache(minC, capacity)
+	oldLeader := NewUniCache(minC, capacity, 2*capacity)
+	newLeader := NewUniCache(minC, capacity, 2*capacity)
+	follower := NewUniCache(minC, capacity, 2*capacity)
 
 	keys := make([][]byte, 5)
 	for i := range keys {
@@ -740,7 +740,7 @@ func TestBatchUpdateCacheEncodedIDFastPath(t *testing.T) {
 	const startIdx = uint64(1000)
 	committed := startIdx + 20
 	minC := func() uint64 { return committed }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := NewUniCache(minC, capacity, 2*capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast")
 	}
@@ -804,7 +804,7 @@ func TestBatchUpdateCacheEvictedPath(t *testing.T) {
 	const startIdx = uint64(1000)
 	minVersion := startIdx + uint64(2*capacity)
 	minC := func() uint64 { return minVersion }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := NewUniCache(minC, capacity, 2*capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast")
 	}
@@ -879,7 +879,7 @@ func TestBatchUpdateCacheVarintDefensive(t *testing.T) {
 	const startIdx = uint64(1)
 	committed := uint64(startIdx + 10)
 	minC := func() uint64 { return committed }
-	uc := NewUniCache(minC, capacity)
+	uc := NewUniCache(minC, capacity, 2*capacity)
 
 	// Commit a key so it can be encoded.
 	key := []byte("varint-test-key")

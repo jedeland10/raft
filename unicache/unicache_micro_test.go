@@ -92,7 +92,7 @@ func makeDataset(n, sizeB, hitRatio int, hotVals [][]byte) [][]byte {
 func newWideOpenUniCache() ucpkg.UniCache {
 	minCacheVersion := func() uint64 { return 1 << 62 }
 	const huge = 1 << 30
-	return ucpkg.NewUniCache(minCacheVersion, huge)
+	return ucpkg.NewUniCache(minCacheVersion, huge, 2*huge)
 }
 
 var headerPrinted sync.Map

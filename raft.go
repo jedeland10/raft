@@ -29,6 +29,7 @@ import (
 	"go.etcd.io/raft/v3/quorum"
 	pb "go.etcd.io/raft/v3/raftpb"
 	"go.etcd.io/raft/v3/tracker"
+	uc "go.etcd.io/raft/v3/unicache"
 )
 
 const (
@@ -289,6 +290,9 @@ type Config struct {
 
 	// Size of UniCache, <= 0 disabled
 	UniCacheSize int
+
+	// Size of the UniCache evicted retention buffer. If 0, defaults to 2*UniCacheSize.
+	UniCacheEvictedSize int
 }
 
 func (c *Config) validate() error {
@@ -474,9 +478,14 @@ func newRaft(c *Config) *raft {
 	}
 
 	if c.UniCacheSize > 0 {
-		uc := unicache.NewUniCache(
+		evictedSize := c.UniCacheEvictedSize
+		if evictedSize <= 0 {
+			evictedSize = 2 * c.UniCacheSize
+		}
+		uc := uc.NewUniCache(
 			r.trk.MinCacheIdxMatch,
 			c.UniCacheSize,
+			evictedSize,
 		)
 		r.raftLog.uniCache = uc
 	}
@@ -2082,7 +2091,7 @@ func logSliceFromMsgApp(m *pb.Message) logSlice {
 func (r *raft) handleAppendEntries(m pb.Message) {
 	if r.raftLog.uniCache != nil {
 		for i := range m.Entries {
-			if m.Entries[i].Type == pb.EntryNormal && unicache.IsEncodedData(m.Entries[i].Data) {
+			if m.Entries[i].Type == pb.EntryNormal && uc.IsEncodedData(m.Entries[i].Data) {
 				if decoded, ok := r.raftLog.uniCache.DecodeEntry(m.Entries[i]); ok {
 					m.Entries[i] = decoded
 					m.Entries[i].EncodedID = 0 // Clear leader's ID; follower cache IDs may differ
