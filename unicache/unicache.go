@@ -31,6 +31,8 @@ type UniCache interface {
 	PurgeEvicted()
 	CacheHits() uint64
 	ResetCacheHits() uint64
+	Restores() uint64
+	ResetRestores() uint64
 	GetMinCacheIdx(currMinIdx uint64) uint64
 }
 
@@ -58,6 +60,7 @@ type uniCache struct {
 	minCacheVersion func() uint64
 
 	cachehits    uint64
+	restores     uint64
 	lastInFlight uint64
 }
 
@@ -91,6 +94,15 @@ func (uc *uniCache) CacheHits() uint64 {
 func (uc *uniCache) ResetCacheHits() uint64 {
 	atomic.StoreUint64(&uc.cachehits, 0)
 	return atomic.LoadUint64(&uc.cachehits)
+}
+
+func (uc *uniCache) Restores() uint64 {
+	return atomic.LoadUint64(&uc.restores)
+}
+
+func (uc *uniCache) ResetRestores() uint64 {
+	atomic.StoreUint64(&uc.restores, 0)
+	return atomic.LoadUint64(&uc.restores)
 }
 
 // NewUniCache implements the UniCache interface.
@@ -215,6 +227,7 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 			}
 		}
 		//fmt.Printf("[SafeEncode] index=%d eviction risk, restoring full for ID=%d\n", appendIdx, encodedID)
+		atomic.AddUint64(&uc.restores, 1)
 		newData, err := ReplaceProtoField(data, cachedFieldNumber, elem.key, protowire.BytesType)
 		if err == nil {
 			//fmt.Printf("[SafeEncode] index=%d successfully restored ID=%d\n", appendIdx, encodedID)
@@ -224,6 +237,7 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 	// check evicted cache
 	if evElem, ok := uc.evicted[encodedID]; ok {
 		ev := evElem.Value.(*cacheEntry)
+		atomic.AddUint64(&uc.restores, 1)
 		newData, err := ReplaceProtoField(data, cachedFieldNumber, ev.key, protowire.BytesType)
 		if err == nil {
 			//fmt.Printf("[SafeEncode] index=%d restored from evicted ID=%d keyHash=%x\n", appendIdx, encodedID, sha256.Sum256(ev.key))

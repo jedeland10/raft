@@ -244,6 +244,9 @@ type Node interface {
 	// UniCache: returns number of cache hits
 	CacheHits() uint64
 	ResetCacheHits() uint64
+	// UniCache: returns number of SafeEncode restores (encoded then restored to full)
+	Restores() uint64
+	ResetRestores() uint64
 }
 
 type Peer struct {
@@ -482,6 +485,20 @@ func (n *node) ResetCacheHits() uint64 {
 		return 0
 	}
 	return n.rn.raft.raftLog.uniCache.ResetCacheHits()
+}
+
+func (n *node) Restores() uint64 {
+	if n.rn.raft.raftLog.uniCache == nil {
+		return 0
+	}
+	return n.rn.raft.raftLog.uniCache.Restores()
+}
+
+func (n *node) ResetRestores() uint64 {
+	if n.rn.raft.raftLog.uniCache == nil {
+		return 0
+	}
+	return n.rn.raft.raftLog.uniCache.ResetRestores()
 }
 
 func (n *node) Propose(ctx context.Context, data []byte) error {
