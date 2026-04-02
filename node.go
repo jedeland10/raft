@@ -449,6 +449,8 @@ func (n *node) run() {
 			readyc = nil
 		case <-advancec:
 			n.rn.Advance(rd)
+			// Flush deferred cache updates off the critical commit path.
+			r.raftLog.flushCacheUpdate()
 			rd = Ready{}
 			advancec = nil
 		case c := <-n.status:
