@@ -1327,9 +1327,9 @@ func (r *raft) Step(m pb.Message) error {
 	}
 
 	switch m.Type {
-	//RepliCache extension
+	// UniCache: only the leader encodes proposals.
 	case pb.MsgProp:
-		if r.raftLog.uniCache != nil && len(m.Entries) > 0 {
+		if r.state == StateLeader && r.raftLog.uniCache != nil && len(m.Entries) > 0 {
 			for i := range m.Entries {
 				if m.Entries[i].EncodedID == 0 {
 					encData, encID := r.raftLog.uniCache.EncodeData(
@@ -1344,7 +1344,6 @@ func (r *raft) Step(m pb.Message) error {
 			}
 		}
 
-		// 2. CRITICAL: Pass the (now compressed) message to the standard state machine.
 		err := r.step(r, m)
 		if err != nil {
 			return err
