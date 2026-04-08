@@ -361,6 +361,12 @@ func (l *raftLog) flushCacheUpdate() {
 		l.logger.Panicf("uniCache failed to load committed entries [%d-%d]: %v", l.cacheWaterMark+1, l.pendingCacheCommit, err)
 	}
 	l.cacheWaterMark = l.pendingCacheCommit
+
+	// Log cache stats every 10000 committed entries
+	if l.cacheWaterMark%10000 == 0 && l.cacheWaterMark > 0 {
+		l.logger.Infof("unicache stats: commitIdx=%d cacheHits=%d restores=%d",
+			l.cacheWaterMark, l.uniCache.CacheHits(), l.uniCache.Restores())
+	}
 }
 
 func (l *raftLog) appliedTo(i uint64, size entryEncodingSize) {
