@@ -364,8 +364,8 @@ func (l *raftLog) flushCacheUpdate() {
 
 	// Log cache stats every 10000 committed entries
 	if l.cacheWaterMark%10000 == 0 && l.cacheWaterMark > 0 {
-		l.logger.Infof("unicache stats: commitIdx=%d cacheHits=%d restores=%d",
-			l.cacheWaterMark, l.uniCache.CacheHits(), l.uniCache.Restores())
+		l.logger.Infof("unicache stats: commitIdx=%d cacheHits=%d restores=%d nextId=%d",
+			l.cacheWaterMark, l.uniCache.CacheHits(), l.uniCache.Restores(), l.uniCache.GetNextId())
 	}
 }
 

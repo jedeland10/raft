@@ -284,7 +284,10 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 	elem, ok := uc.cache[encodedID]
 
 	if ok {
-		if appendIdx-elem.lastIdx <= uint64(uc.capacity) && uc.minCacheVersion() >= elem.addedIdx {
+		minCV := uc.minCacheVersion()
+		distOk := appendIdx-elem.lastIdx <= uint64(uc.capacity)
+		versionOk := minCV >= elem.addedIdx
+		if distOk && versionOk {
 			atomic.AddUint64(&uc.cachehits, 1)
 
 			fullData, err := replaceKey(data, elem.key, protowire.BytesType)
@@ -292,7 +295,12 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 				return data, fullData
 			}
 		}
-		atomic.AddUint64(&uc.restores, 1)
+		// Log first few restore failures for diagnostics
+		restoreCount := atomic.AddUint64(&uc.restores, 1)
+		if restoreCount <= 5 || restoreCount%10000 == 0 {
+			fmt.Printf("[SafeEncode restore] appendIdx=%d lastIdx=%d addedIdx=%d minCV=%d capacity=%d distOk=%v versionOk=%v\n",
+				appendIdx, elem.lastIdx, elem.addedIdx, minCV, uc.capacity, distOk, versionOk)
+		}
 		newData, err := replaceKey(data, elem.key, protowire.BytesType)
 		if err == nil {
 			return newData, newData
