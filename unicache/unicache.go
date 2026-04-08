@@ -13,11 +13,78 @@ import (
 
 const cachedFieldNumber = 1
 
+// nestedFieldNumber is the protobuf field number of the submessage (e.g. PutRequest)
+// inside the outer message (e.g. InternalRaftRequest) that contains the key to cache.
+// Set to 0 to disable nesting (flat Data layout).
+const nestedFieldNumber = 4
+
 // Precomputed protobuf tags for fast checking: tag = (field_number << 3) | wire_type
 const (
 	cachedFieldBytesTag  = byte((cachedFieldNumber << 3) | int(protowire.BytesType))  // 0x0A for field 1
 	cachedFieldVarintTag = byte((cachedFieldNumber << 3) | int(protowire.VarintType)) // 0x08 for field 1
 )
+
+// extractKey extracts the cached key from Data, handling the nested PutRequest
+// structure when nestedFieldNumber != 0.
+func extractKey(data []byte) (keyBytes []byte, wireType protowire.Type, err error) {
+	if nestedFieldNumber == 0 {
+		return GetProtoFieldAndWireType(data, cachedFieldNumber)
+	}
+	putBytes, putWT, err := GetProtoFieldAndWireType(data, nestedFieldNumber)
+	if err != nil {
+		return nil, 0, err
+	}
+	if putWT != protowire.BytesType {
+		return nil, 0, fmt.Errorf("nested field %d is not a submessage", nestedFieldNumber)
+	}
+	return GetProtoFieldAndWireType(putBytes, cachedFieldNumber)
+}
+
+// replaceKey replaces the cached key in Data, handling the nested PutRequest
+// structure when nestedFieldNumber != 0.
+func replaceKey(data []byte, newValue []byte, newWireType protowire.Type) ([]byte, error) {
+	if nestedFieldNumber == 0 {
+		return ReplaceProtoField(data, cachedFieldNumber, newValue, newWireType)
+	}
+	putBytes, putWT, err := GetProtoFieldAndWireType(data, nestedFieldNumber)
+	if err != nil {
+		return nil, err
+	}
+	if putWT != protowire.BytesType {
+		return nil, fmt.Errorf("nested field %d is not a submessage", nestedFieldNumber)
+	}
+	newPutBytes, err := ReplaceProtoField(putBytes, cachedFieldNumber, newValue, newWireType)
+	if err != nil {
+		return nil, err
+	}
+	return ReplaceProtoField(data, nestedFieldNumber, newPutBytes, protowire.BytesType)
+}
+
+// isNestedEncoded checks whether the cached key field inside the nested
+// submessage is varint-encoded (i.e. replaced with a cache ID).
+func isNestedEncoded(data []byte) bool {
+	if nestedFieldNumber == 0 {
+		return len(data) > 0 && data[0] == cachedFieldVarintTag
+	}
+	putBytes, putWT, err := GetProtoFieldAndWireType(data, nestedFieldNumber)
+	if err != nil || putWT != protowire.BytesType {
+		return false
+	}
+	return len(putBytes) > 0 && putBytes[0] == cachedFieldVarintTag
+}
+
+// isNestedUnencoded checks whether the cached key field inside the nested
+// submessage is in its original bytes form (not cache-encoded).
+func isNestedUnencoded(data []byte) bool {
+	if nestedFieldNumber == 0 {
+		return len(data) > 0 && data[0] == cachedFieldBytesTag
+	}
+	putBytes, putWT, err := GetProtoFieldAndWireType(data, nestedFieldNumber)
+	if err != nil || putWT != protowire.BytesType {
+		return false
+	}
+	return len(putBytes) > 0 && putBytes[0] == cachedFieldBytesTag
+}
 
 // UniCache defines methods for encoding/decoding entries with key caching.
 type UniCache interface {
@@ -200,9 +267,9 @@ func (uc *uniCache) PurgeEvicted() {
 }
 
 // IsEncodedData reports whether data contains a RepliCache-encoded entry,
-// i.e. protobuf field 1 carries a varint cache ID instead of raw bytes.
+// i.e. the cached key field carries a varint cache ID instead of raw bytes.
 func IsEncodedData(data []byte) bool {
-	return len(data) > 0 && data[0] == cachedFieldVarintTag
+	return isNestedEncoded(data)
 }
 
 func (uc *uniCache) GetNextId() uint32 {
@@ -219,18 +286,15 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 	if ok {
 		if appendIdx-elem.lastIdx <= uint64(uc.capacity) && uc.minCacheVersion() >= elem.addedIdx {
 			atomic.AddUint64(&uc.cachehits, 1)
-			//fmt.Printf("[SafeEncode] index=%d cachehits=%d appendIdx=%d lastIdx=%d minCachedIdx=%d\n", appendIdx, uc.cachehits, appendIdx, elem.lastIdx, uc.minCacheVersion())
 
-			fullData, err := ReplaceProtoField(data, cachedFieldNumber, elem.key, protowire.BytesType)
+			fullData, err := replaceKey(data, elem.key, protowire.BytesType)
 			if err == nil {
 				return data, fullData
 			}
 		}
-		//fmt.Printf("[SafeEncode] index=%d eviction risk, restoring full for ID=%d\n", appendIdx, encodedID)
 		atomic.AddUint64(&uc.restores, 1)
-		newData, err := ReplaceProtoField(data, cachedFieldNumber, elem.key, protowire.BytesType)
+		newData, err := replaceKey(data, elem.key, protowire.BytesType)
 		if err == nil {
-			//fmt.Printf("[SafeEncode] index=%d successfully restored ID=%d\n", appendIdx, encodedID)
 			return newData, newData
 		}
 	}
@@ -238,12 +302,10 @@ func (uc *uniCache) SafeEncode(data []byte, appendIdx uint64, encodedID uint32) 
 	if evElem, ok := uc.evicted[encodedID]; ok {
 		ev := evElem.Value.(*cacheEntry)
 		atomic.AddUint64(&uc.restores, 1)
-		newData, err := ReplaceProtoField(data, cachedFieldNumber, ev.key, protowire.BytesType)
+		newData, err := replaceKey(data, ev.key, protowire.BytesType)
 		if err == nil {
-			//fmt.Printf("[SafeEncode] index=%d restored from evicted ID=%d keyHash=%x\n", appendIdx, encodedID, sha256.Sum256(ev.key))
 			return newData, newData
 		}
-		//fmt.Println("[SafeEncode] evicted restore failed:", err)
 	}
 	//fmt.Printf("[SafeEncode] index=%d didnt find data for ID=%d, capacity=%d, cache size=%d, evicted size=%d, nextId=%d\n",
 	//	appendIdx, encodedID, uc.capacity, len(uc.cache), len(uc.evicted), uc.nextID)
@@ -255,14 +317,12 @@ func (uc *uniCache) EncodeData(data []byte, currCacheIdx uint64) ([]byte, uint32
 		return data, 0
 	}
 
-	// Parse protobuf OUTSIDE the lock
-	keyBytes, _, err := GetProtoFieldAndWireType(data, cachedFieldNumber)
+	keyBytes, _, err := extractKey(data)
 	if err != nil {
 		return data, 0
 	}
 	keyStr := string(keyBytes)
 
-	// Only lock for the map lookups (fast)
 	id, ok := uc.reverseCache[keyStr]
 	if !ok {
 		return data, 0
@@ -272,8 +332,6 @@ func (uc *uniCache) EncodeData(data []byte, currCacheIdx uint64) ([]byte, uint32
 	}
 
 	// Safety check: ID must be in active cache range
-	// Only encode if id >= nextID - capacity (entry is in active cache)
-	// Leader will have entry in cache or evicted (safety net)
 	if uc.nextID > uint32(uc.capacity) {
 		minActiveID := uc.nextID - uint32(uc.capacity/2)
 		if id < minActiveID {
@@ -281,9 +339,8 @@ func (uc *uniCache) EncodeData(data []byte, currCacheIdx uint64) ([]byte, uint32
 		}
 	}
 
-	// Encoding outside the lock
 	encodedID := protowire.AppendVarint(nil, uint64(id))
-	newData, err := ReplaceProtoField(data, cachedFieldNumber, encodedID, protowire.VarintType)
+	newData, err := replaceKey(data, encodedID, protowire.VarintType)
 	if err == nil {
 		return newData, id
 	}
@@ -296,18 +353,17 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) (pb.Entry, bool) {
 		return entry, true
 	}
 
-	// Super-fast check: if first byte matches BytesType tag, data is NOT encoded
-	if entry.Data[0] == cachedFieldBytesTag {
+	// Fast check: if the nested key field is unencoded bytes, nothing to do.
+	if isNestedUnencoded(entry.Data) {
 		return entry, true
 	}
 
-	// Only parse protobuf if we might need to decode (first byte is 0x08 = VarintType)
-	keyField, wireType, err := GetProtoFieldAndWireType(entry.Data, cachedFieldNumber)
+	keyField, wireType, err := extractKey(entry.Data)
 	if err != nil {
 		return entry, false
 	}
 
-	// Should not reach here at 0% hit rate, but keep as safety
+	// Already full bytes — not encoded.
 	if wireType == protowire.BytesType {
 		return entry, true
 	}
@@ -320,11 +376,10 @@ func (uc *uniCache) DecodeEntry(entry pb.Entry) (pb.Entry, bool) {
 
 		elem, ok := uc.cache[uint32(id)]
 		if !ok {
-			//fmt.Println("[decode cache] not in cache: ", id, "index", entry.Index, "type ", entry.Type)
 			return entry, false
 		}
 
-		newData, err := ReplaceProtoField(entry.Data, cachedFieldNumber, elem.key, protowire.BytesType)
+		newData, err := replaceKey(entry.Data, elem.key, protowire.BytesType)
 		if err != nil {
 			return entry, false
 		}
@@ -341,7 +396,7 @@ func (uc *uniCache) UpdateCache(entry pb.Entry) (pb.Entry, bool) {
 
 	// If entry is encoded (VarintType), decode it first
 	// This happens on the leader which doesn't go through DecodeEntry
-	if entry.Data[0] == cachedFieldVarintTag {
+	if isNestedEncoded(entry.Data) {
 		decoded, ok := uc.DecodeEntry(entry)
 		if !ok {
 			return entry, false
@@ -349,13 +404,12 @@ func (uc *uniCache) UpdateCache(entry pb.Entry) (pb.Entry, bool) {
 		entry = decoded
 	}
 
-	// Fast path: if first byte is BytesType tag, we know the structure
-	if entry.Data[0] != cachedFieldBytesTag {
+	// Fast path: if the nested key is unencoded bytes, we know the structure
+	if !isNestedUnencoded(entry.Data) {
 		return entry, false
 	}
 
-	// Parse protobuf OUTSIDE the lock
-	keyField, wireType, err := GetProtoFieldAndWireType(entry.Data, cachedFieldNumber)
+	keyField, wireType, err := extractKey(entry.Data)
 	if err != nil {
 		return entry, false
 	}
@@ -477,7 +531,7 @@ func (uc *uniCache) BatchUpdateCache(entries []pb.Entry) ([]pb.Entry, bool) {
 		currentData := entry.Data
 
 		// Handle varint-encoded entries (leader seeing its own encoded entries)
-		if currentData[0] == cachedFieldVarintTag {
+		if isNestedEncoded(currentData) {
 			decoded, ok := uc.DecodeEntry(entry)
 			if !ok {
 				return nil, false
@@ -485,11 +539,11 @@ func (uc *uniCache) BatchUpdateCache(entries []pb.Entry) ([]pb.Entry, bool) {
 			currentData = decoded.Data
 		}
 
-		if currentData[0] != cachedFieldBytesTag {
+		if !isNestedUnencoded(currentData) {
 			return nil, false
 		}
 
-		keyField, wireType, err := GetProtoFieldAndWireType(currentData, cachedFieldNumber)
+		keyField, wireType, err := extractKey(currentData)
 		if err != nil || wireType != protowire.BytesType {
 			return nil, false
 		}
