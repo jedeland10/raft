@@ -9,6 +9,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.4
 	github.com/stretchr/testify v1.10.0
+	go.etcd.io/raft/v3 v3.0.0-00010101000000-000000000000
 	google.golang.org/protobuf v1.36.3
 )
 
@@ -17,3 +18,5 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace go.etcd.io/raft/v3 => ./

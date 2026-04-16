@@ -25,6 +25,7 @@ message Entry {
 	optional EntryType  Type  = 1 [(gogoproto.nullable) = false];
 	optional bytes      Data  = 4;
     optional uint32    EncodedID  = 5 [(gogoproto.nullable) = false];
+    repeated uint32    EncodedIDs = 6 [(gogoproto.nullable) = false];
 }
 
 message SnapshotMetadata {

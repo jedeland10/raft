@@ -92,7 +92,8 @@ func makeDataset(n, sizeB, hitRatio int, hotVals [][]byte) [][]byte {
 func newWideOpenUniCache() ucpkg.UniCache {
 	minCacheVersion := func() uint64 { return 1 << 62 }
 	const huge = 1 << 30
-	return ucpkg.NewUniCache(minCacheVersion, huge)
+	return ucpkg.NewUniCacheWithPaths(minCacheVersion, huge,
+		[][]ucpkg.PathStep{{{FieldNum: 1}}}, nil)
 }
 
 var headerPrinted sync.Map
@@ -117,12 +118,12 @@ func BenchmarkEncodeData(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 
-			var sink uint32
+			var sink int
 			idx := 0
 			for i := 0; i < b.N; i++ {
 				p := payloads[idx]
-				_, id := uc.EncodeData(p, 0)
-				sink += id
+				_, ids := uc.EncodeData(p, 0)
+				sink += len(ids)
 				idx++
 				if idx == len(payloads) {
 					idx = 0
@@ -223,14 +224,14 @@ func BenchmarkSafeEncode(b *testing.B) {
 			// In the wild, this data comes from the Leader's 'EncodeData'.
 			type prepared struct {
 				data []byte
-				id   uint32
+				ids  []uint32
 			}
 			inputs := make([]prepared, len(payloads))
 
 			for i, p := range payloads {
 				// We act as the leader encoding the data first
-				encData, id := uc.EncodeData(p, 0)
-				inputs[i] = prepared{data: encData, id: id}
+				encData, ids := uc.EncodeData(p, 0)
+				inputs[i] = prepared{data: encData, ids: ids}
 			}
 
 			// We assume the follower is up to date (safe window)
@@ -247,7 +248,7 @@ func BenchmarkSafeEncode(b *testing.B) {
 				in := inputs[idx]
 
 				// Benchmark the decision logic + reconstruction cost
-				d1, d2 := uc.SafeEncode(in.data, safeAppendIdx, in.id)
+				d1, d2 := uc.SafeEncode(in.data, safeAppendIdx, in.ids)
 
 				sinkLen += len(d1) + len(d2)
 				idx++
@@ -274,11 +275,11 @@ func BenchmarkBatchUpdateCache(b *testing.B) {
 			entries := make([]pb.Entry, len(payloads))
 			for i := range payloads {
 				p := payloads[i]
-				_, id := uc.EncodeData(p, 0)
+				_, ids := uc.EncodeData(p, 0)
 				entries[i] = pb.Entry{
-					Index:     uint64(50_000 + i),
-					Data:      p,
-					EncodedID: id, // non-zero for cache hits, 0 for misses
+					Index:      uint64(50_000 + i),
+					Data:       p,
+					EncodedIDs: ids, // non-nil for cache hits, nil for misses
 				}
 			}
 

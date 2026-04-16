@@ -279,11 +279,12 @@ func (ConfChangeType) EnumDescriptor() ([]byte, []int) {
 }
 
 type Entry struct {
-	Term      uint64    `protobuf:"varint,2,opt,name=Term" json:"Term"`
-	Index     uint64    `protobuf:"varint,3,opt,name=Index" json:"Index"`
-	Type      EntryType `protobuf:"varint,1,opt,name=Type,enum=raftpb.EntryType" json:"Type"`
-	Data      []byte    `protobuf:"bytes,4,opt,name=Data" json:"Data,omitempty"`
-	EncodedID uint32    `protobuf:"varint,5,opt,name=EncodedID" json:"EncodedID"`
+	Term       uint64    `protobuf:"varint,2,opt,name=Term" json:"Term"`
+	Index      uint64    `protobuf:"varint,3,opt,name=Index" json:"Index"`
+	Type       EntryType `protobuf:"varint,1,opt,name=Type,enum=raftpb.EntryType" json:"Type"`
+	Data       []byte    `protobuf:"bytes,4,opt,name=Data" json:"Data,omitempty"`
+	EncodedID  uint32    `protobuf:"varint,5,opt,name=EncodedID" json:"EncodedID"`
+	EncodedIDs []uint32  `protobuf:"varint,6,rep,name=EncodedIDs" json:"EncodedIDs,omitempty"`
 }
 
 func (m *Entry) Reset()         { *m = Entry{} }
@@ -823,6 +824,13 @@ func (m *Entry) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if len(m.EncodedIDs) > 0 {
+		for iNdEx := len(m.EncodedIDs) - 1; iNdEx >= 0; iNdEx-- {
+			i = encodeVarintRaft(dAtA, i, uint64(m.EncodedIDs[iNdEx]))
+			i--
+			dAtA[i] = 0x30
+		}
+	}
 	i = encodeVarintRaft(dAtA, i, uint64(m.EncodedID))
 	i--
 	dAtA[i] = 0x28
@@ -1260,6 +1268,11 @@ func (m *Entry) Size() (n int) {
 		n += 1 + l + sovRaft(uint64(l))
 	}
 	n += 1 + sovRaft(uint64(m.EncodedID))
+	if len(m.EncodedIDs) > 0 {
+		for _, e := range m.EncodedIDs {
+			n += 1 + sovRaft(uint64(e))
+		}
+	}
 	return n
 }
 
@@ -1564,6 +1577,26 @@ func (m *Entry) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EncodedIDs", wireType)
+			}
+			var v uint32
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRaft
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.EncodedIDs = append(m.EncodedIDs, v)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipRaft(dAtA[iNdEx:])

@@ -25,10 +25,17 @@ func encodeProtoField(fieldNum int, value []byte) []byte {
 	return append(encoded, value...)
 }
 
+// newFlatCache creates a cache with a flat (no nesting) single-field path for testing.
+// This matches the test data format: encodeProtoField(1, key) → [tag:1, len, value].
+func newFlatCache(minCacheVersion func() uint64, capacity int) UniCache {
+	return NewUniCacheWithPaths(minCacheVersion, capacity,
+		[][]PathStep{{{FieldNum: 1}}}, nil)
+}
+
 // commitKeys simulates committing a slice of keys via UpdateCache starting at startIdx.
 func commitKeys(uc UniCache, keys [][]byte, startIdx uint64) {
 	for i, key := range keys {
-		data := encodeProtoField(cachedFieldNumber, key)
+		data := encodeProtoField(1, key)
 		uc.UpdateCache(makeEntry(data, startIdx+uint64(i)))
 	}
 }
@@ -45,7 +52,7 @@ func TestLRUEviction(t *testing.T) {
 	// buffer rather than being deleted directly.
 	const startIdx = uint64(10 * capacity) // large enough that the evictLRU guard fires
 	minC := func() uint64 { return startIdx + uint64(capacity) }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := newFlatCache(minC, capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast UniCache to *uniCache")
 	}
@@ -56,7 +63,7 @@ func TestLRUEviction(t *testing.T) {
 	const extra = 50
 	for i := 0; i < capacity+extra; i++ {
 		key := []byte(fmt.Sprintf("key-%d", i))
-		data := encodeProtoField(cachedFieldNumber, key)
+		data := encodeProtoField(1, key)
 		uc.UpdateCache(makeEntry(data, startIdx+uint64(i)))
 	}
 
@@ -88,7 +95,7 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	const startIdx = uint64(1)
 	committed := uint64(startIdx + 10)
 	minC := func() uint64 { return committed }
-	uc := NewUniCache(minC, capacity)
+	uc := newFlatCache(minC, capacity)
 
 	// Commit 10 unique keys.
 	keys := make([][]byte, 10)
@@ -98,12 +105,12 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	commitKeys(uc, keys, startIdx)
 
 	for _, key := range keys {
-		original := encodeProtoField(cachedFieldNumber, key)
+		original := encodeProtoField(1, key)
 
 		// EncodeData should find the key and return a shorter varint-ID form.
-		encoded, id := uc.EncodeData(original, committed)
-		if id == 0 {
-			t.Errorf("EncodeData returned id=0 for key %q (not found in cache after commit)", key)
+		encoded, ids := uc.EncodeData(original, committed)
+		if ids == nil {
+			t.Errorf("EncodeData returned nil ids for key %q (not found in cache after commit)", key)
 			continue
 		}
 		if !IsEncodedData(encoded) {
@@ -140,7 +147,7 @@ func TestPurgeEvicted(t *testing.T) {
 	const startIdx = uint64(1000)
 	var minVersion uint64
 	minC := func() uint64 { return minVersion }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := newFlatCache(minC, capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast UniCache to *uniCache")
 	}
@@ -153,7 +160,7 @@ func TestPurgeEvicted(t *testing.T) {
 	// for the very first overflow, then clears for subsequent ones.
 	for i := 0; i < capacity+20; i++ {
 		key := []byte(fmt.Sprintf("evict-key-%d", i))
-		data := encodeProtoField(cachedFieldNumber, key)
+		data := encodeProtoField(1, key)
 		uc.UpdateCache(makeEntry(data, startIdx+uint64(i)))
 	}
 
@@ -207,7 +214,7 @@ func TestSafeEncodeRestoresFromEvicted(t *testing.T) {
 	// Non-zero minVersion so evictions go to the evicted buffer.
 	minVersion := startIdx + uint64(2*capacity)
 	minC := func() uint64 { return minVersion }
-	uc := NewUniCache(minC, capacity)
+	uc := newFlatCache(minC, capacity)
 	inner, ok := uc.(*uniCache)
 	if !ok {
 		t.Fatal("type assertion failed")
@@ -215,13 +222,13 @@ func TestSafeEncodeRestoresFromEvicted(t *testing.T) {
 
 	// Commit the target key first (will get the lowest ID, be evicted first).
 	targetKey := []byte("target-evicted-key")
-	targetRaw := encodeProtoField(cachedFieldNumber, targetKey)
+	targetRaw := encodeProtoField(1, targetKey)
 	uc.UpdateCache(makeEntry(targetRaw, startIdx))
 
 	// Fill the cache past capacity so targetKey is evicted to the evicted buffer.
 	for i := 1; i <= capacity+5; i++ {
 		key := []byte(fmt.Sprintf("filler-%d", i))
-		data := encodeProtoField(cachedFieldNumber, key)
+		data := encodeProtoField(1, key)
 		uc.UpdateCache(makeEntry(data, startIdx+uint64(i)))
 	}
 
@@ -240,11 +247,11 @@ func TestSafeEncodeRestoresFromEvicted(t *testing.T) {
 
 	// Simulate a MsgApp entry that was encoded with targetID before eviction:
 	// manually construct the varint-encoded form.
-	fakeEncoded := protowire.AppendTag(nil, cachedFieldNumber, protowire.VarintType)
+	fakeEncoded := protowire.AppendTag(nil, 1, protowire.VarintType)
 	fakeEncoded = protowire.AppendVarint(fakeEncoded, uint64(targetID))
 
 	// SafeEncode should restore the full data from the evicted buffer.
-	restored, full := uc.SafeEncode(fakeEncoded, startIdx+uint64(capacity+10), targetID)
+	restored, full := uc.SafeEncode(fakeEncoded, startIdx+uint64(capacity+10), []uint32{targetID})
 	if full == nil {
 		t.Fatal("SafeEncode returned nil full-data — failed to restore from evicted buffer")
 	}
@@ -269,7 +276,7 @@ func TestLRUConcurrency(t *testing.T) {
 	const startIdx = uint64(1)
 	committed := uint64(startIdx + numKeys)
 	minC := func() uint64 { return committed }
-	uc := NewUniCache(minC, capacity)
+	uc := newFlatCache(minC, capacity)
 
 	// Populate the cache sequentially before starting concurrent readers.
 	hotKeys := make([][]byte, numKeys)
@@ -281,7 +288,7 @@ func TestLRUConcurrency(t *testing.T) {
 	// Pre-encode all hot keys so goroutines have encoded entries to decode.
 	hotEncoded := make([][]byte, numKeys)
 	for i, key := range hotKeys {
-		raw := encodeProtoField(cachedFieldNumber, key)
+		raw := encodeProtoField(1, key)
 		enc, _ := uc.EncodeData(raw, committed)
 		hotEncoded[i] = enc
 	}
@@ -294,7 +301,7 @@ func TestLRUConcurrency(t *testing.T) {
 			for j := 0; j < 500; j++ {
 				i := j % numKeys
 				// Read path: encode then decode (concurrent map reads, no writes).
-				raw := encodeProtoField(cachedFieldNumber, hotKeys[i])
+				raw := encodeProtoField(1, hotKeys[i])
 				enc, _ := uc.EncodeData(raw, committed)
 				uc.DecodeEntry(makeEntry(enc, committed+uint64(j)))
 			}
@@ -311,7 +318,7 @@ func TestLRUHeavyConcurrency(t *testing.T) {
 	const startIdx = uint64(1)
 	committed := uint64(startIdx + numHot)
 	minC := func() uint64 { return committed }
-	uc := NewUniCache(minC, capacity)
+	uc := newFlatCache(minC, capacity)
 
 	// Pre-populate with hot keys.
 	hotKeys := make([][]byte, numHot)
@@ -331,9 +338,9 @@ func TestLRUHeavyConcurrency(t *testing.T) {
 				// 80% hot reads, 20% cold misses.
 				var raw []byte
 				if j%5 != 0 {
-					raw = encodeProtoField(cachedFieldNumber, hotKeys[j%numHot])
+					raw = encodeProtoField(1, hotKeys[j%numHot])
 				} else {
-					raw = encodeProtoField(cachedFieldNumber,
+					raw = encodeProtoField(1,
 						[]byte(fmt.Sprintf("cold-g%d-j%d", id, j)))
 				}
 				enc, _ := uc.EncodeData(raw, committed)
@@ -357,8 +364,8 @@ func TestLeaderTransitionCacheConsistency(t *testing.T) {
 	committed := uint64(startIdx + 10)
 	minC := func() uint64 { return committed }
 
-	node1Cache := NewUniCache(minC, capacity) // initial leader
-	node2Cache := NewUniCache(minC, capacity) // initial follower → new leader
+	node1Cache := newFlatCache(minC, capacity) // initial leader
+	node2Cache := newFlatCache(minC, capacity) // initial follower → new leader
 
 	keys := make([][]byte, 10)
 	for i := range keys {
@@ -369,12 +376,12 @@ func TestLeaderTransitionCacheConsistency(t *testing.T) {
 
 	// Simulate node1 (old leader) encoding entry committed+1 using key[0].
 	reusedKey := keys[0]
-	reusedRaw := encodeProtoField(cachedFieldNumber, reusedKey)
+	reusedRaw := encodeProtoField(1, reusedKey)
 	node1Cache.UpdateCache(makeEntry(reusedRaw, committed+1))
 	node2Cache.UpdateCache(makeEntry(reusedRaw, committed+1))
-	encoded, id := node1Cache.EncodeData(reusedRaw, committed+1)
-	if id == 0 {
-		t.Fatal("old leader EncodeData returned id=0")
+	encoded, ids := node1Cache.EncodeData(reusedRaw, committed+1)
+	if ids == nil {
+		t.Fatal("old leader EncodeData returned nil ids")
 	}
 	if !IsEncodedData(encoded) {
 		t.Fatal("expected encoded data from old leader")
@@ -384,9 +391,9 @@ func TestLeaderTransitionCacheConsistency(t *testing.T) {
 	// node2 encodes a subsequent entry with the same shared key.
 	node1Cache.UpdateCache(makeEntry(reusedRaw, committed+2))
 	node2Cache.UpdateCache(makeEntry(reusedRaw, committed+2))
-	enc2, id2 := node2Cache.EncodeData(reusedRaw, committed+2)
-	if id2 == 0 {
-		t.Fatal("new leader EncodeData returned id=0; cache should be consistent")
+	enc2, ids2 := node2Cache.EncodeData(reusedRaw, committed+2)
+	if ids2 == nil {
+		t.Fatal("new leader EncodeData returned nil ids; cache should be consistent")
 	}
 
 	// node1 (now follower) decodes entry from new leader.
@@ -408,18 +415,18 @@ func TestNewLeaderWithFreshCache(t *testing.T) {
 	minC := func() uint64 { return committed }
 
 	// New leader has an empty cache (cold start / recovery).
-	newLeaderCache := NewUniCache(minC, capacity)
+	newLeaderCache := newFlatCache(minC, capacity)
 
 	// Follower has a populated cache.
-	followerCache := NewUniCache(minC, capacity)
+	followerCache := newFlatCache(minC, capacity)
 	key := []byte("well-known-key")
 	commitKeys(followerCache, [][]byte{key}, 1)
 
 	// New leader doesn't know the key → EncodeData returns id=0 → sends raw.
-	rawData := encodeProtoField(cachedFieldNumber, key)
-	_, id := newLeaderCache.EncodeData(rawData, committed)
-	if id != 0 {
-		t.Fatalf("expected id=0 from cold cache, got %d", id)
+	rawData := encodeProtoField(1, key)
+	_, ids := newLeaderCache.EncodeData(rawData, committed)
+	if ids != nil {
+		t.Fatalf("expected nil ids from cold cache, got %v", ids)
 	}
 
 	// Follower receives raw data; DecodeEntry must be a no-op.
@@ -449,7 +456,7 @@ func TestEvictLRUAlwaysMovesToEvicted(t *testing.T) {
 	const startIdx = uint64(10 * capacity) // high enough so evictLRU guard fires
 	// minCacheVersion returns 0, simulating a follower.
 	minC := func() uint64 { return 0 }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := newFlatCache(minC, capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast UniCache to *uniCache")
 	}
@@ -457,7 +464,7 @@ func TestEvictLRUAlwaysMovesToEvicted(t *testing.T) {
 	// Fill past capacity to trigger eviction.
 	for i := 0; i < capacity+5; i++ {
 		key := []byte(fmt.Sprintf("follower-key-%d", i))
-		data := encodeProtoField(cachedFieldNumber, key)
+		data := encodeProtoField(1, key)
 		uc.UpdateCache(makeEntry(data, startIdx+uint64(i)))
 	}
 
@@ -481,7 +488,7 @@ func TestEvictedCapEnforced(t *testing.T) {
 	const capacity = 10
 	const startIdx = uint64(10 * capacity)
 	minC := func() uint64 { return 0 }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := newFlatCache(minC, capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast UniCache to *uniCache")
 	}
@@ -490,7 +497,7 @@ func TestEvictedCapEnforced(t *testing.T) {
 	// 5*capacity ensures evicted buffer would exceed 2*capacity without the cap.
 	for i := 0; i < 5*capacity; i++ {
 		key := []byte(fmt.Sprintf("cap-key-%d", i))
-		data := encodeProtoField(cachedFieldNumber, key)
+		data := encodeProtoField(1, key)
 		uc.UpdateCache(makeEntry(data, startIdx+uint64(i)))
 	}
 
@@ -513,13 +520,13 @@ func TestEvictedCapEnforced(t *testing.T) {
 func TestSafeEncodeReturnsNilOnMiss(t *testing.T) {
 	const capacity = 10
 	minC := func() uint64 { return 100 }
-	uc := NewUniCache(minC, capacity)
+	uc := newFlatCache(minC, capacity)
 
 	// Construct a varint-encoded entry with a non-existent ID.
-	fakeEncoded := protowire.AppendTag(nil, cachedFieldNumber, protowire.VarintType)
+	fakeEncoded := protowire.AppendTag(nil, 1, protowire.VarintType)
 	fakeEncoded = protowire.AppendVarint(fakeEncoded, uint64(999))
 
-	data, full := uc.SafeEncode(fakeEncoded, 200, 999)
+	data, full := uc.SafeEncode(fakeEncoded, 200, []uint32{999})
 	if data != nil {
 		t.Errorf("expected nil data on miss, got %x", data)
 	}
@@ -681,9 +688,9 @@ func TestLeaderTransitionMixedEncoding(t *testing.T) {
 	minC := func() uint64 { return committed }
 
 	// All three nodes learn the same 5 committed entries.
-	oldLeader := NewUniCache(minC, capacity)
-	newLeader := NewUniCache(minC, capacity)
-	follower := NewUniCache(minC, capacity)
+	oldLeader := newFlatCache(minC, capacity)
+	newLeader := newFlatCache(minC, capacity)
+	follower := newFlatCache(minC, capacity)
 
 	keys := make([][]byte, 5)
 	for i := range keys {
@@ -694,20 +701,20 @@ func TestLeaderTransitionMixedEncoding(t *testing.T) {
 	commitKeys(follower, keys, startIdx)
 
 	// Old leader sends an encoded entry (in-flight during transfer).
-	sharedRaw := encodeProtoField(cachedFieldNumber, keys[0])
+	sharedRaw := encodeProtoField(1, keys[0])
 	oldLeader.UpdateCache(makeEntry(sharedRaw, committed+1))
 	follower.UpdateCache(makeEntry(sharedRaw, committed+1))
 	newLeader.UpdateCache(makeEntry(sharedRaw, committed+1))
-	encodedByOld, id1 := oldLeader.EncodeData(sharedRaw, committed+1)
-	if id1 == 0 {
+	encodedByOld, ids1 := oldLeader.EncodeData(sharedRaw, committed+1)
+	if ids1 == nil {
 		t.Fatal("old leader should encode a committed key")
 	}
 
 	// New leader sends a brand-new key (not in cache) → raw fallback.
-	brandNewRaw := encodeProtoField(cachedFieldNumber, []byte("brand-new-after-transfer"))
-	_, id2 := newLeader.EncodeData(brandNewRaw, committed+2)
-	if id2 != 0 {
-		t.Fatalf("new key should not be in cache, got id=%d", id2)
+	brandNewRaw := encodeProtoField(1, []byte("brand-new-after-transfer"))
+	_, ids2 := newLeader.EncodeData(brandNewRaw, committed+2)
+	if ids2 != nil {
+		t.Fatalf("new key should not be in cache, got ids=%v", ids2)
 	}
 
 	// Follower decodes both: encoded from old leader, raw from new leader.
@@ -740,7 +747,7 @@ func TestBatchUpdateCacheEncodedIDFastPath(t *testing.T) {
 	const startIdx = uint64(1000)
 	committed := startIdx + 20
 	minC := func() uint64 { return committed }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := newFlatCache(minC, capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast")
 	}
@@ -762,17 +769,17 @@ func TestBatchUpdateCacheEncodedIDFastPath(t *testing.T) {
 		ids[i] = id
 	}
 
-	// Build entries that carry EncodedID (simulating leader's committed entries).
+	// Build entries that carry EncodedIDs (simulating leader's committed entries).
 	// The Data is the raw proto (BytesType) — the fast path should NOT parse it.
 	newIndex := committed + 100
 	entries := make([]pb.Entry, len(keys))
 	for i, key := range keys {
 		entries[i] = pb.Entry{
-			Index:     newIndex + uint64(i),
-			Term:      1,
-			Type:      pb.EntryNormal,
-			Data:      encodeProtoField(cachedFieldNumber, key),
-			EncodedID: ids[i],
+			Index:      newIndex + uint64(i),
+			Term:       1,
+			Type:       pb.EntryNormal,
+			Data:       encodeProtoField(1, key),
+			EncodedIDs: []uint32{ids[i]},
 		}
 	}
 
@@ -804,20 +811,20 @@ func TestBatchUpdateCacheEvictedPath(t *testing.T) {
 	const startIdx = uint64(1000)
 	minVersion := startIdx + uint64(2*capacity)
 	minC := func() uint64 { return minVersion }
-	uc, ok := NewUniCache(minC, capacity).(*uniCache)
+	uc, ok := newFlatCache(minC, capacity).(*uniCache)
 	if !ok {
 		t.Fatal("failed to cast")
 	}
 
 	// Commit target key first (gets the lowest ID, will be evicted first).
 	targetKey := []byte("evicted-batch-key")
-	targetRaw := encodeProtoField(cachedFieldNumber, targetKey)
+	targetRaw := encodeProtoField(1, targetKey)
 	uc.UpdateCache(makeEntry(targetRaw, startIdx))
 
 	// Fill cache past capacity to evict targetKey.
 	for i := 1; i <= capacity+5; i++ {
 		key := []byte(fmt.Sprintf("filler-batch-%d", i))
-		data := encodeProtoField(cachedFieldNumber, key)
+		data := encodeProtoField(1, key)
 		uc.UpdateCache(makeEntry(data, startIdx+uint64(i)))
 	}
 
@@ -834,14 +841,14 @@ func TestBatchUpdateCacheEvictedPath(t *testing.T) {
 		t.Fatal("targetKey not found in evicted buffer")
 	}
 
-	// BatchUpdateCache with EncodedID pointing to evicted entry.
+	// BatchUpdateCache with EncodedIDs pointing to evicted entry.
 	newIndex := startIdx + uint64(capacity+20)
 	entries := []pb.Entry{{
-		Index:     newIndex,
-		Term:      1,
-		Type:      pb.EntryNormal,
-		Data:      targetRaw,
-		EncodedID: targetID,
+		Index:      newIndex,
+		Term:       1,
+		Type:       pb.EntryNormal,
+		Data:       targetRaw,
+		EncodedIDs: []uint32{targetID},
 	}}
 
 	result, ok2 := uc.BatchUpdateCache(entries)
@@ -879,17 +886,17 @@ func TestBatchUpdateCacheVarintDefensive(t *testing.T) {
 	const startIdx = uint64(1)
 	committed := uint64(startIdx + 10)
 	minC := func() uint64 { return committed }
-	uc := NewUniCache(minC, capacity)
+	uc := newFlatCache(minC, capacity)
 
 	// Commit a key so it can be encoded.
 	key := []byte("varint-test-key")
-	rawData := encodeProtoField(cachedFieldNumber, key)
+	rawData := encodeProtoField(1, key)
 	uc.UpdateCache(makeEntry(rawData, startIdx))
 
 	// Encode the key to get a varint-form entry.
-	encoded, id := uc.EncodeData(rawData, committed)
-	if id == 0 {
-		t.Fatal("EncodeData returned id=0")
+	encoded, ids := uc.EncodeData(rawData, committed)
+	if ids == nil {
+		t.Fatal("EncodeData returned nil ids")
 	}
 	if !IsEncodedData(encoded) {
 		t.Fatal("expected varint-encoded data")

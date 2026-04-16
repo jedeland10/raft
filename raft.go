@@ -873,11 +873,11 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 
 	if r.raftLog.uniCache != nil {
 		// Only allocate the encoded-twin slice when at least one entry carries an
-		// encoded ID. At zero cache-hit rate every entry has EncodedID==0 and
+		// encoded ID. At zero cache-hit rate every entry has EncodedIDs empty and
 		// SafeEncode is a no-op, so we skip the allocation entirely.
 		anyEncoded := false
 		for _, e := range es {
-			if e.EncodedID != 0 {
+			if len(e.EncodedIDs) > 0 {
 				anyEncoded = true
 				break
 			}
@@ -890,13 +890,13 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 				enc.Data, fullData = r.raftLog.uniCache.SafeEncode(
 					enc.Data,
 					enc.Index,
-					enc.EncodedID,
+					enc.EncodedIDs,
 				)
-				if enc.EncodedID != 0 && enc.Data == nil {
+				if len(enc.EncodedIDs) > 0 && enc.Data == nil {
 					r.logger.Warningf(
-						"%x proposal contains encoded ID %d that cannot be resolved; dropping proposal",
+						"%x proposal contains encoded IDs %v that cannot be resolved; dropping proposal",
 						r.id,
-						enc.EncodedID,
+						enc.EncodedIDs,
 					)
 					return false
 				}
@@ -1331,14 +1331,14 @@ func (r *raft) Step(m pb.Message) error {
 	case pb.MsgProp:
 		if r.raftLog.uniCache != nil && len(m.Entries) > 0 {
 			for i := range m.Entries {
-				if m.Entries[i].EncodedID == 0 {
-					encData, encID := r.raftLog.uniCache.EncodeData(
+				if len(m.Entries[i].EncodedIDs) == 0 {
+					encData, encIDs := r.raftLog.uniCache.EncodeData(
 						m.Entries[i].Data,
 						r.raftLog.lastIndex(),
 					)
-					if encID != 0 {
+					if encIDs != nil {
 						m.Entries[i].Data = encData
-						m.Entries[i].EncodedID = encID
+						m.Entries[i].EncodedIDs = encIDs
 					}
 				}
 			}
@@ -2085,7 +2085,8 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 			if m.Entries[i].Type == pb.EntryNormal && unicache.IsEncodedData(m.Entries[i].Data) {
 				if decoded, ok := r.raftLog.uniCache.DecodeEntry(m.Entries[i]); ok {
 					m.Entries[i] = decoded
-					m.Entries[i].EncodedID = 0 // Clear leader's ID; follower cache IDs may differ
+					m.Entries[i].EncodedID = 0   // Clear leader's ID; follower cache IDs may differ
+				m.Entries[i].EncodedIDs = nil // Clear multi-field IDs too
 				} else {
 					panic(fmt.Sprintf("cache decode failed for index %d committed %d with data: %d",
 						m.Entries[i].Index, r.raftLog.committed, m.Entries[i].Data))
