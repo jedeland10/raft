@@ -64,12 +64,8 @@ type raftLog struct {
 	// UniCache module
 	uniCache unicache.UniCache
 	// cacheWaterMark is the highest committed index at which the uniCache
-	// dictionary has been updated. It advances only in flushCacheUpdate(),
-	// making it safe to report to the leader as the follower's cache version.
+	// dictionary has been updated. Advanced synchronously in commitTo().
 	cacheWaterMark uint64
-	// pendingCacheCommit is the commit index up to which the cache needs
-	// to be updated. Set in commitTo, flushed in flushCacheUpdate.
-	pendingCacheCommit uint64
 }
 
 // newLog returns log using the given storage and default options. It
@@ -331,36 +327,31 @@ func (l *raftLog) lastIndex() uint64 {
 func (l *raftLog) commitTo(tocommit uint64) {
 	// never decrease commit
 	if l.committed < tocommit {
+		// Synchronously update the UniCache dictionary.
+		// This ensures that as soon as an entry is marked "committed",
+		// the leader recognizes its ID for any subsequent proposals.
+		if l.uniCache != nil {
+			entries, err := l.slice(l.committed+1, tocommit+1, noLimit)
+			if err == nil {
+				l.uniCache.BatchUpdateCache(entries)
+				if len(entries) > 0 {
+					l.uniCache.PurgeEvicted()
+				}
+			} else {
+				l.logger.Panicf("uniCache failed to load committed entries [%d-%d]: %v", l.committed+1, tocommit, err)
+			}
+			l.cacheWaterMark = tocommit
+		}
+
 		if l.lastIndex() < tocommit {
 			l.logger.Panicf("tocommit(%d) is out of range [lastIndex(%d)]. Was the raft log corrupted, truncated, or lost?", tocommit, l.lastIndex())
-		}
-		// Record that the cache needs updating up to this index.
-		// The actual BatchUpdateCache work is deferred to flushCacheUpdate()
-		// to keep commitTo off the critical path.
-		if l.uniCache != nil && tocommit > l.pendingCacheCommit {
-			l.pendingCacheCommit = tocommit
 		}
 		l.committed = tocommit
 	}
 }
 
-// flushCacheUpdate processes any pending cache updates that were deferred
-// by commitTo. It updates the UniCache dictionary and advances cacheWaterMark.
-// Called from the Advance path, outside the critical commit-processing window.
+// flushCacheUpdate is now a no-op. Cache updates happen synchronously in commitTo.
 func (l *raftLog) flushCacheUpdate() {
-	if l.uniCache == nil || l.pendingCacheCommit <= l.cacheWaterMark {
-		return
-	}
-	entries, err := l.slice(l.cacheWaterMark+1, l.pendingCacheCommit+1, noLimit)
-	if err == nil {
-		l.uniCache.BatchUpdateCache(entries)
-		if len(entries) > 0 {
-			l.uniCache.PurgeEvicted()
-		}
-	} else {
-		l.logger.Panicf("uniCache failed to load committed entries [%d-%d]: %v", l.cacheWaterMark+1, l.pendingCacheCommit, err)
-	}
-	l.cacheWaterMark = l.pendingCacheCommit
 }
 
 func (l *raftLog) appliedTo(i uint64, size entryEncodingSize) {

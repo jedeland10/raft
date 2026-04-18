@@ -1764,17 +1764,12 @@ func stepLeader(r *raft, m pb.Message) error {
 				}
 
 				if r.maybeCommit() {
-					// Leader's own CacheIdx must reflect what has actually been
-					// flushed into the uniCache dictionary (cacheWaterMark),
-					// not r.raftLog.committed. Since BatchUpdateCache is deferred
-					// to flushCacheUpdate(), committed may run ahead of
-					// cacheWaterMark. Reporting the latter keeps MinCacheIdxMatch
-					// honest so the leader only encodes with IDs present in
-					// every replica's cache.
+					// Leader's cache is always valid up to its committed index,
+					// so bump its CacheIdx before broadcasting.
 					if r.raftLog.uniCache != nil {
 						if prL := r.trk.Progress[r.id]; prL != nil &&
-							r.raftLog.cacheWaterMark > prL.CacheIdx {
-							prL.CacheIdx = r.raftLog.cacheWaterMark
+							r.raftLog.committed > prL.CacheIdx {
+							prL.CacheIdx = r.raftLog.committed
 						}
 					}
 
